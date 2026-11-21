@@ -385,7 +385,10 @@ export default function ZeroDrainWarRoom() {
           txHash: hash,
           latencyMs: ms,
         });
-        setToast({ type: "ok", text: t.toastBindOk(ms) });
+        setToast({
+          type: "ok",
+          text: hasBalance ? t.toastBindOk(ms) : t.toastBindNeedDeposit(ms),
+        });
       }
       await fetchStatus();
     } catch (err) {
@@ -898,22 +901,54 @@ export default function ZeroDrainWarRoom() {
 
             {/* ==================== SINGLE FOCUSED HERO ACTION AREA ==================== */}
             <div className="mt-5 rounded-2xl border border-white/10 bg-black/25 p-4 sm:p-5">
-              {/* STEP 1: Bind Hardware Key */}
+              {/* STEP 1: Bind Hardware Key (and guide MetaMask users cleanly to fund 0.1 MON if vault is empty) */}
               {activeStep === 1 && (
                 <div>
-                  <p className="mb-4 text-sm leading-relaxed text-zinc-300">{t.step1Hint}</p>
-                  <button
-                    onClick={handleStep1Setup}
-                    disabled={busy !== null}
-                    className="flex w-full items-center justify-center gap-2.5 rounded-2xl bg-violet-600 px-5 py-4 text-base font-bold text-white shadow-lg shadow-violet-600/25 transition hover:bg-violet-500 cursor-pointer disabled:opacity-50"
-                  >
-                    <KeyRound className="h-5 w-5" />
-                    {busy === "bind"
-                      ? t.step1Busy
-                      : passkeyMode === "webauthn"
-                      ? t.step1BtnWebAuthn
-                      : t.step1BtnWebCrypto}
-                  </button>
+                  {localKeyMatchesChain && !hasBalance ? (
+                    <>
+                      <p className="mb-4 text-sm leading-relaxed text-zinc-300">{t.step1DepositHint}</p>
+                      <button
+                        onClick={handleDeposit}
+                        disabled={busy !== null}
+                        className="flex w-full items-center justify-center gap-2.5 rounded-2xl bg-violet-600 px-5 py-4 text-base font-bold text-white shadow-lg shadow-violet-600/25 transition hover:bg-violet-500 cursor-pointer disabled:opacity-50"
+                      >
+                        <Plus className="h-5 w-5" />
+                        {busy === "deposit" ? t.depositing : t.step1DepositBtn}
+                      </button>
+                      {walletMode === "metamask" &&
+                        status &&
+                        Number(status.user.walletBalanceMon) < 0.11 && (
+                          <div className="mt-3 rounded-xl border border-amber-400/35 bg-amber-950/30 p-3 text-xs text-amber-200">
+                            <p className="leading-relaxed">
+                              {t.step1LowWalletHint(status.user.walletBalanceMon)}
+                            </p>
+                            <button
+                              onClick={() => setWalletMode("demo")}
+                              className="mt-2 inline-flex items-center gap-1.5 rounded-lg bg-amber-400/20 px-3 py-1.5 font-semibold text-amber-100 hover:bg-amber-400/30 cursor-pointer"
+                            >
+                              <Zap className="h-3.5 w-3.5" />
+                              {t.switchToDemoBtn}
+                            </button>
+                          </div>
+                        )}
+                    </>
+                  ) : (
+                    <>
+                      <p className="mb-4 text-sm leading-relaxed text-zinc-300">{t.step1Hint}</p>
+                      <button
+                        onClick={handleStep1Setup}
+                        disabled={busy !== null}
+                        className="flex w-full items-center justify-center gap-2.5 rounded-2xl bg-violet-600 px-5 py-4 text-base font-bold text-white shadow-lg shadow-violet-600/25 transition hover:bg-violet-500 cursor-pointer disabled:opacity-50"
+                      >
+                        <KeyRound className="h-5 w-5" />
+                        {busy === "bind"
+                          ? t.step1Busy
+                          : passkeyMode === "webauthn"
+                          ? t.step1BtnWebAuthn
+                          : t.step1BtnWebCrypto}
+                      </button>
+                    </>
+                  )}
                 </div>
               )}
 
@@ -961,6 +996,32 @@ export default function ZeroDrainWarRoom() {
                         <RotateCcw className="h-5 w-5" />
                         {busy === "reset" ? t.resettingBtn : t.replayBtn}
                       </button>
+                    </>
+                  ) : !hasBalance && walletMode === "metamask" ? (
+                    <>
+                      <p className="mb-4 text-sm leading-relaxed text-zinc-300">{t.step1DepositHint}</p>
+                      <button
+                        onClick={handleDeposit}
+                        disabled={busy !== null}
+                        className="flex w-full items-center justify-center gap-2.5 rounded-2xl bg-violet-600 px-5 py-4 text-base font-bold text-white shadow-lg shadow-violet-600/25 transition hover:bg-violet-500 cursor-pointer disabled:opacity-50"
+                      >
+                        <Plus className="h-5 w-5" />
+                        {busy === "deposit" ? t.depositing : t.step1DepositBtn}
+                      </button>
+                      {status && Number(status.user.walletBalanceMon) < 0.11 && (
+                        <div className="mt-3 rounded-xl border border-amber-400/35 bg-amber-950/30 p-3 text-xs text-amber-200">
+                          <p className="leading-relaxed">
+                            {t.step1LowWalletHint(status.user.walletBalanceMon)}
+                          </p>
+                          <button
+                            onClick={() => setWalletMode("demo")}
+                            className="mt-2 inline-flex items-center gap-1.5 rounded-lg bg-amber-400/20 px-3 py-1.5 font-semibold text-amber-100 hover:bg-amber-400/30 cursor-pointer"
+                          >
+                            <Zap className="h-3.5 w-3.5" />
+                            {t.switchToDemoBtn}
+                          </button>
+                        </div>
+                      )}
                     </>
                   ) : (
                     <>

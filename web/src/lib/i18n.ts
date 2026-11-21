@@ -34,6 +34,10 @@ export interface Dictionary {
   step1BtnWebAuthn: string;
   step1BtnWebCrypto: string;
   step1Busy: string;
+  step1DepositHint: string;
+  step1DepositBtn: string;
+  step1LowWalletHint: (walletBal: string) => string;
+  switchToDemoBtn: string;
 
   step2Hint: string;
   step2Btn: string;
@@ -97,6 +101,7 @@ export interface Dictionary {
 
   toastDepositOk: (ms: number) => string;
   toastBindOk: (ms: number) => string;
+  toastBindNeedDeposit: (ms: number) => string;
   toastTrippedOk: (ms: number) => string;
   toastAlreadyTripped: string;
   toastBlockedOk: string;
@@ -147,6 +152,10 @@ export const DICTIONARIES: Record<Locale, Dictionary> = {
     step1BtnWebAuthn: "绑定 TouchID / FaceID 并准备演练",
     step1BtnWebCrypto: "绑定 P-256 备用密钥并准备演练",
     step1Busy: "正在注册上链...",
+    step1DepositHint: "硬件密钥已绑定上链！当前金库余额不足 0.05 MON，请点击下方按钮存入 0.1 MON 以解锁后续劫持与逃生演练。",
+    step1DepositBtn: "存入 0.1 MON 并继续演练",
+    step1LowWalletHint: (bal) => `检测到当前 MetaMask 余额仅 ${bal} MON（需 ≥ 0.11 MON 支付存币与 Gas），可直接切换免钱包模式零门槛体验。`,
+    switchToDemoBtn: "切换至「免钱包演练」继续体验",
 
     step2Hint: "点击下方按钮模拟真实 Name.com DNS 劫持：页面外观完全不变，但提款目标将被暗中篡改为黑客地址。",
     step2Btn: "模拟 Name.com DNS 劫持攻击",
@@ -210,6 +219,7 @@ export const DICTIONARIES: Record<Locale, Dictionary> = {
 
     toastDepositOk: (ms) => `成功存入 0.10 MON（确认耗时 ${ms} ms）`,
     toastBindOk: (ms) => `硬件公钥已上链注册（耗时 ${ms} ms），请点击第 2 步发起劫持演练！`,
+    toastBindNeedDeposit: (ms) => `硬件公钥已注册（耗时 ${ms} ms）！请点击下方按钮存入 0.1 MON 完成金库准备。`,
     toastTrippedOk: (ms) => `侦测到 DNS 劫持！哨兵已于 ${ms} ms 在链上触发熔断，请点击提款测试拦截！`,
     toastAlreadyTripped: "合约已处于 PASSKEY_ONLY 保护中，可直接点击提款测试拦截！",
     toastBlockedOk: "拦截成功！恶意的 Drainer 提款已遭链上 Revert，请用硬件逃生取回资金。",
@@ -259,6 +269,10 @@ export const DICTIONARIES: Record<Locale, Dictionary> = {
     step1BtnWebAuthn: "綁定 TouchID / FaceID 並準備演練",
     step1BtnWebCrypto: "綁定 P-256 備援密鑰並準備演練",
     step1Busy: "正在註冊上鏈...",
+    step1DepositHint: "硬體密鑰已綁定上鏈！目前金庫餘額不足 0.05 MON，請點擊下方按鈕存入 0.1 MON 以解鎖後續劫持與逃生演練。",
+    step1DepositBtn: "存入 0.1 MON 並繼續演練",
+    step1LowWalletHint: (bal) => `偵測到目前 MetaMask 餘額僅 ${bal} MON（需 ≥ 0.11 MON 支付存幣與 Gas），可直接切換免錢包模式零門檻體驗。`,
+    switchToDemoBtn: "切換至「免錢包演練」繼續體驗",
 
     step2Hint: "點擊下方按鈕模擬真實 Name.com DNS 劫持：頁面外觀完全不變，但提款目標將被暗中竄改為駭客地址。",
     step2Btn: "模擬 Name.com DNS 劫持攻擊",
@@ -322,6 +336,7 @@ export const DICTIONARIES: Record<Locale, Dictionary> = {
 
     toastDepositOk: (ms) => `成功存入 0.10 MON（確認耗時 ${ms} ms）`,
     toastBindOk: (ms) => `硬體公鑰已上鏈註冊（耗時 ${ms} ms），請點擊第 2 步發起劫持演練！`,
+    toastBindNeedDeposit: (ms) => `硬體公鑰已註冊（耗時 ${ms} ms）！請點擊下方按鈕存入 0.1 MON 完成金庫準備。`,
     toastTrippedOk: (ms) => `偵測到 DNS 劫持！哨兵已於 ${ms} ms 在鏈上觸發熔斷，請點擊提款測試攔截！`,
     toastAlreadyTripped: "合約已處於 PASSKEY_ONLY 保護中，可直接點擊提款測試攔截！",
     toastBlockedOk: "攔截成功！惡意的 Drainer 提款已遭鏈上 Revert，請用硬體逃生取回資金。",
@@ -371,6 +386,10 @@ export const DICTIONARIES: Record<Locale, Dictionary> = {
     step1BtnWebAuthn: "Bind TouchID / FaceID & Prepare Demo",
     step1BtnWebCrypto: "Bind WebCrypto P-256 & Prepare Demo",
     step1Busy: "Registering on Monad...",
+    step1DepositHint: "Hardware key is bound! Your vault balance is below 0.05 MON—click below to deposit 0.1 MON from your wallet and unlock Step 2.",
+    step1DepositBtn: "Deposit 0.1 MON & Continue",
+    step1LowWalletHint: (bal) => `MetaMask balance is ${bal} MON (needs ≥ 0.11 MON for deposit + gas). You can switch to Instant Demo anytime with zero wallet balance required.`,
+    switchToDemoBtn: "Switch to Instant Demo (Zero Balance Needed)",
 
     step2Hint: "Simulate a real Name.com DNS hijack: the UI still looks legitimate, but Withdraw silently routes to an attacker.",
     step2Btn: "Simulate Name.com DNS Hijack",
@@ -434,6 +453,7 @@ export const DICTIONARIES: Record<Locale, Dictionary> = {
 
     toastDepositOk: (ms) => `Deposited 0.10 MON on Monad (${ms} ms)`,
     toastBindOk: (ms) => `Hardware public key registered on-chain (${ms} ms). Ready for Step 2!`,
+    toastBindNeedDeposit: (ms) => `Hardware public key registered (${ms} ms)! Next, click below to deposit 0.1 MON into the vault.`,
     toastTrippedOk: (ms) => `DNS hijack caught! Vault switched to PASSKEY_ONLY in ${ms} ms.`,
     toastAlreadyTripped: "Vault is already in PASSKEY_ONLY mode—click Withdraw to verify the revert!",
     toastBlockedOk: "Drainer tx reverted on-chain (0 MON lost). Use Hardware Escape to recover.",
