@@ -27,6 +27,7 @@ export async function onRequestGet(context: PagesContext) {
       userVaultBalance,
       userWalletBalance,
       userPasskey,
+      lockedRecoveryAddress,
       userNonce,
     ] = await Promise.all([
       publicClient.getBlockNumber(),
@@ -57,6 +58,12 @@ export async function onRequestGet(context: PagesContext) {
       publicClient.readContract({
         address: vaultAddress,
         abi: ZERO_DRAIN_VAULT_ABI,
+        functionName: "getLockedRecoveryAddress",
+        args: [activeUser],
+      }),
+      publicClient.readContract({
+        address: vaultAddress,
+        abi: ZERO_DRAIN_VAULT_ABI,
         functionName: "nonces",
         args: [activeUser],
       }),
@@ -77,6 +84,7 @@ export async function onRequestGet(context: PagesContext) {
     return jsonResponse({
       ok: true,
       chainId: 10143,
+      publicDemoMode: context.env.PUBLIC_DEMO_MODE === "true",
       vaultAddress,
       demoAddress: demoAccount.address,
       sentinelAddress: sentinelAccount.address,
@@ -95,6 +103,7 @@ export async function onRequestGet(context: PagesContext) {
       tvlMon: formatEther(tvl),
       user: {
         address: activeUser,
+        lockedRecoveryAddress,
         vaultBalanceWei: userVaultBalance.toString(),
         vaultBalanceMon: formatEther(userVaultBalance),
         walletBalanceMon: Number(formatEther(userWalletBalance)).toFixed(4),

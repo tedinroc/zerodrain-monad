@@ -7,9 +7,14 @@ import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol
 
 /**
  * @title ZeroDrainVault
- * @notice Monad-native DeFi vault protected against frontend/DNS hijacking via
- *         sub-second on-chain circuit breaking (degraded PASSKEY_ONLY mode) and
- *         native EIP-7951 (0x0100) secp256r1 / WebAuthn Passkey hardware verification.
+ * @notice Monad-native DeFi vault hardened against frontend/DNS hijacking:
+ *         1) Sub-second on-chain circuit breaker degrading NORMAL -> PASSKEY_ONLY (never freezing funds).
+ *         2) Passkey & recovery-address mutations are strictly frozen during PASSKEY_ONLY incidents
+ *            so a compromised UI cannot trick users into overwriting their hardware key.
+ *         3) Hardware escape (EIP-7951 0x0100) removes arbitrary frontend-supplied payout targets and
+ *            pays strictly to msg.sender or a recovery address pre-bound during NORMAL mode,
+ *            neutralizing pre-signing WYSIWYS recipient tampering.
+ * @dev In production, `admin` should be a Safe Multisig + Timelock contract rather than a single EOA.
  */
 contract ZeroDrainVault is ReentrancyGuard {
     enum SecurityMode {
@@ -23,7 +28,7 @@ contract ZeroDrainVault is ReentrancyGuard {
         bool registered;
     }
 
-    bytes32 public constant RECOVERY_DOMAIN = keccak256("ZERODRAIN_RECOVERY_V1");
+    bytes32 public constant RECOVERY_DOMAIN = keccak256("ZERODRAIN_RECOVERY_V2");
 
     address public admin;
     address public sentinel;
@@ -41,6 +46,7 @@ contract ZeroDrainVault is ReentrancyGuard {
 
     mapping(address => uint256) public balances;
     mapping(address => Passkey) public passkeys;
+    mapping(address => address payable) public recoveryAddresses;
     mapping(address => uint256) public nonces;
 
     error Unauthorized();
@@ -49,6 +55,8 @@ contract ZeroDrainVault is ReentrancyGuard {
     error InsufficientBalance();
     error InvalidPublicKey();
     error PasskeyNotRegistered();
+    error PasskeyLockedDuringBreaker();
+    error RecoveryAddressLockedDuringBreaker();
     error SignatureExpired();
     error InvalidPasskeySignature();
     error TransferFailed();
@@ -56,6 +64,7 @@ contract ZeroDrainVault is ReentrancyGuard {
 
     event Deposited(address indexed user, uint256 amount, uint256 newBalance);
     event PasskeyRegistered(address indexed user, bytes32 qx, bytes32 qy);
+    event RecoveryAddressUpdated(address indexed user, address indexed recoveryAddress);
     event Withdrawn(address indexed user, address indexed recipient, uint256 amount);
     event BreakerTripped(
         address indexed triggeredBy,
@@ -67,7 +76,7 @@ contract ZeroDrainVault is ReentrancyGuard {
     event ModeRestored(address indexed restoredBy, bytes32 indexed trustedHash, uint256 blockNumber);
     event EmergencyWithdrawn(
         address indexed user,
-        address indexed safeRecipient,
+        address indexed lockedRecipient,
         uint256 amount,
         uint256 nonce,
         string method,
@@ -92,9 +101,6 @@ contract ZeroDrainVault is ReentrancyGuard {
         mode = SecurityMode.NORMAL;
     }
 
-    /**
-     * @notice Deposit native MON into the ZeroDrain-protected vault.
-     */
     function deposit() external payable {
         if (msg.value == 0) revert InvalidAmount();
         balances[msg.sender] += msg.value;
@@ -102,9 +108,6 @@ contract ZeroDrainVault is ReentrancyGuard {
         emit Deposited(msg.sender, msg.value, balances[msg.sender]);
     }
 
-    /**
-     * @notice Deposit native MON on behalf of a user (useful for demo onboarding).
-     */
     function depositFor(address user) external payable {
         if (user == address(0)) revert InvalidAddress();
         if (msg.value == 0) revert InvalidAmount();
@@ -114,18 +117,37 @@ contract ZeroDrainVault is ReentrancyGuard {
     }
 
     /**
-     * @notice Bind a NIST P-256 (secp256r1) public key from TouchID/FaceID or WebCrypto.
+     * @notice Bind a NIST P-256 (secp256r1) public key.
+     *         Strictly frozen during PASSKEY_ONLY incidents so a hijacked frontend cannot
+     *         trick a victim into overwriting their hardware key.
      */
     function registerPasskey(bytes32 qx, bytes32 qy) external {
+        if (mode == SecurityMode.PASSKEY_ONLY) revert PasskeyLockedDuringBreaker();
         if (!P256.isValidPublicKey(qx, qy)) revert InvalidPublicKey();
         passkeys[msg.sender] = Passkey({qx: qx, qy: qy, registered: true});
         emit PasskeyRegistered(msg.sender, qx, qy);
     }
 
     /**
+     * @notice Optional cold recovery address pre-bound during NORMAL mode (defaults to msg.sender).
+     *         Strictly frozen during PASSKEY_ONLY incidents.
+     */
+    function setRecoveryAddress(address payable _recovery) external {
+        if (mode == SecurityMode.PASSKEY_ONLY) revert RecoveryAddressLockedDuringBreaker();
+        recoveryAddresses[msg.sender] = _recovery;
+        emit RecoveryAddressUpdated(msg.sender, _recovery);
+    }
+
+    /**
+     * @notice Returns the immutable-during-incident payout address for hardware escape.
+     */
+    function getLockedRecoveryAddress(address user) public view returns (address payable) {
+        address payable custom = recoveryAddresses[user];
+        return custom != address(0) ? custom : payable(user);
+    }
+
+    /**
      * @notice Standard withdrawal path. Blocked on-chain when circuit breaker is in PASSKEY_ONLY mode.
-     * @dev Explicit recipient parameter demonstrates how a DNS-hijacked frontend silently redirects funds
-     *      to a drainer address unless intercepted by ZeroDrain.
      */
     function withdraw(address payable recipient, uint256 amount) external nonReentrant {
         if (mode == SecurityMode.PASSKEY_ONLY) {
@@ -145,8 +167,7 @@ contract ZeroDrainVault is ReentrancyGuard {
     }
 
     /**
-     * @notice Sub-second on-chain circuit breaker triggered by Sentinel on SRI drift or traced drainer call.
-     *         Degrades vault to PASSKEY_ONLY mode instead of freezing funds (zero false-positive DoS).
+     * @notice Sub-second on-chain circuit breaker degrading vault to PASSKEY_ONLY mode.
      */
     function tripBreaker(bytes32 detectedHash, string calldata reason) external onlySentinelOrAdmin {
         mode = SecurityMode.PASSKEY_ONLY;
@@ -161,6 +182,7 @@ contract ZeroDrainVault is ReentrancyGuard {
 
     /**
      * @notice Restore NORMAL operation after DNS/CDN integrity is verified clean.
+     *         In production, `admin` is a Multisig + Timelock.
      */
     function restoreNormalMode(bytes32 newTrustedHash) external onlyAdmin {
         mode = SecurityMode.NORMAL;
@@ -174,40 +196,41 @@ contract ZeroDrainVault is ReentrancyGuard {
     }
 
     /**
-     * @notice Deterministic domain-separated challenge bound to safeRecipient, amount, nonce, and deadline.
+     * @notice Deterministic domain-separated challenge bound to on-chain locked recovery recipient.
      */
     function computeRecoveryChallenge(
         address user,
-        address safeRecipient,
         uint256 amount,
         uint256 nonce,
         uint256 deadline
     ) public view returns (bytes32) {
+        address lockedRecipient = getLockedRecoveryAddress(user);
         return keccak256(
-            abi.encode(RECOVERY_DOMAIN, block.chainid, address(this), user, safeRecipient, amount, nonce, deadline)
+            abi.encode(RECOVERY_DOMAIN, block.chainid, address(this), user, lockedRecipient, amount, nonce, deadline)
         );
     }
 
     /**
-     * @notice Plan A Hardware Escape Hatch: verifies real WebAuthn (TouchID/FaceID) assertion via
+     * @notice Plan A Hardware Escape Hatch: verifies real WebAuthn (TouchID/FaceID) via
      *         OpenZeppelin WebAuthn -> Monad native EIP-7951 (0x0100) precompile (6,900 gas).
+     *         Payout target is strictly enforced on-chain as getLockedRecoveryAddress(msg.sender);
+     *         frontend CANNOT inject an arbitrary recipient even before signing.
      */
     function emergencyWithdrawWithWebAuthn(
-        address payable safeRecipient,
         uint256 amount,
         uint256 deadline,
         WebAuthn.WebAuthnAuth calldata auth
     ) external nonReentrant {
         if (block.timestamp > deadline) revert SignatureExpired();
-        if (safeRecipient == address(0)) revert InvalidAddress();
         if (amount == 0) revert InvalidAmount();
         if (balances[msg.sender] < amount) revert InsufficientBalance();
 
         Passkey memory pk = passkeys[msg.sender];
         if (!pk.registered) revert PasskeyNotRegistered();
 
+        address payable lockedRecipient = getLockedRecoveryAddress(msg.sender);
         uint256 currentNonce = nonces[msg.sender];
-        bytes32 challenge = computeRecoveryChallenge(msg.sender, safeRecipient, amount, currentNonce, deadline);
+        bytes32 challenge = computeRecoveryChallenge(msg.sender, amount, currentNonce, deadline);
 
         bool valid = WebAuthn.verify(abi.encodePacked(challenge), auth, pk.qx, pk.qy, false);
         if (!valid) revert InvalidPasskeySignature();
@@ -220,33 +243,33 @@ contract ZeroDrainVault is ReentrancyGuard {
         balances[msg.sender] -= amount;
         totalDeposited -= amount;
 
-        (bool ok, ) = safeRecipient.call{value: amount}("");
+        (bool ok, ) = lockedRecipient.call{value: amount}("");
         if (!ok) revert TransferFailed();
 
-        emit EmergencyWithdrawn(msg.sender, safeRecipient, amount, currentNonce, "WEBAUTHN_EIP7951_0x0100", uv);
+        emit EmergencyWithdrawn(msg.sender, lockedRecipient, amount, currentNonce, "WEBAUTHN_EIP7951_0x0100", uv);
     }
 
     /**
-     * @notice Plan B Hardware Escape Hatch: verifies raw WebCrypto ECDSA P-256 (SHA-256) signature
+     * @notice Plan B Demo Fallback: verifies non-extractable WebCrypto ECDSA P-256 signature
      *         strictly via Monad native EIP-7951 (0x0100) precompile (`P256.verifyNative`).
+     *         Payout target is strictly enforced on-chain as getLockedRecoveryAddress(msg.sender).
      */
     function emergencyWithdrawWithRawP256(
-        address payable safeRecipient,
         uint256 amount,
         uint256 deadline,
         bytes32 r,
         bytes32 s
     ) external nonReentrant {
         if (block.timestamp > deadline) revert SignatureExpired();
-        if (safeRecipient == address(0)) revert InvalidAddress();
         if (amount == 0) revert InvalidAmount();
         if (balances[msg.sender] < amount) revert InsufficientBalance();
 
         Passkey memory pk = passkeys[msg.sender];
         if (!pk.registered) revert PasskeyNotRegistered();
 
+        address payable lockedRecipient = getLockedRecoveryAddress(msg.sender);
         uint256 currentNonce = nonces[msg.sender];
-        bytes32 challenge = computeRecoveryChallenge(msg.sender, safeRecipient, amount, currentNonce, deadline);
+        bytes32 challenge = computeRecoveryChallenge(msg.sender, amount, currentNonce, deadline);
         bytes32 digest = sha256(abi.encodePacked(challenge));
 
         bool valid = P256.verifyNative(digest, r, s, pk.qx, pk.qy);
@@ -257,15 +280,12 @@ contract ZeroDrainVault is ReentrancyGuard {
         balances[msg.sender] -= amount;
         totalDeposited -= amount;
 
-        (bool ok, ) = safeRecipient.call{value: amount}("");
+        (bool ok, ) = lockedRecipient.call{value: amount}("");
         if (!ok) revert TransferFailed();
 
-        emit EmergencyWithdrawn(msg.sender, safeRecipient, amount, currentNonce, "RAW_P256_EIP7951_0x0100", false);
+        emit EmergencyWithdrawn(msg.sender, lockedRecipient, amount, currentNonce, "RAW_P256_EIP7951_0x0100", false);
     }
 
-    /**
-     * @notice Proves on-chain that Monad's native EIP-7951 (0x0100) precompile is live.
-     */
     function isNativeP256PrecompileActive() external view returns (bool) {
         return P256.verifyNative(
             0xbb5a52f42f9c9261ed4361f59422a1e30036e7c32b270c8807a419feca605023,
@@ -276,9 +296,6 @@ contract ZeroDrainVault is ReentrancyGuard {
         );
     }
 
-    /**
-     * @notice Single-call telemetry snapshot for the War Room frontend.
-     */
     function getVaultStatus()
         external
         view

@@ -14,53 +14,48 @@
 
 <p align="center">
   <a href="https://zerodrain-monad.pages.dev"><strong>Live Demo (HTTPS)</strong></a> ·
-  <a href="https://testnet.monadvision.com/address/0xbe9e6b77e05a0f345c06d77b1d841f8835b86af4"><strong>Verified Contract (MonadVision)</strong></a> ·
-  <a href="https://testnet.monadscan.com/address/0xbe9e6b77e05a0f345c06d77b1d841f8835b86af4"><strong>Monadscan</strong></a>
+  <a href="https://testnet.monadvision.com/address/0xF81E520E4512387a906D22C700d282aF6D3247ab"><strong>Verified Contract v2 (MonadVision)</strong></a> ·
+  <a href="https://testnet.monadscan.com/address/0xF81E520E4512387a906D22C700d282aF6D3247ab"><strong>Monadscan</strong></a>
 </p>
 
 ---
 
 ## Problem
-Recent DNS/registrar hijacking incidents (e.g., Name.com attacks affecting live DeFi frontends) proved a painful reality: **even when smart contracts are 100% bug-free, a compromised frontend on the legitimate domain can silently swap withdrawal calldata to drain user funds.**
+Recent DNS/registrar hijacking incidents (e.g., Name.com attacks affecting live DeFi frontends) proved that **even when smart contracts are 100% bug-free, a compromised frontend on the legitimate domain can silently swap withdrawal calldata to drain user funds.**
 
-## Solution: Two-Layer On-Chain Defense (Zero False-Positive DoS)
-ZeroDrain moves frontend hijack protection down to the smart contract layer **without freezing user funds**:
+## Solution: Hardened On-Chain Defense (`ZeroDrainVault` v2)
+ZeroDrain enforces frontend hijack protection at the smart contract layer **without freezing user funds**:
 
 1. **Sub-Second Degraded Circuit Breaker (`NORMAL` -> `PASSKEY_ONLY`)**
-   - A lightweight Sentinel monitors the frontend SHA-256 SRI hash against the contract's `trustedFrontendHash` and traces candidate withdrawal calls via Monad's `debug_traceCall (callTracer)`.
-   - On drift or recipient tampering, it calls `tripBreaker()` via `eth_sendRawTransactionSync`, transitioning the vault into `PASSKEY_ONLY` mode in **<1 second (1–2 Monad blocks)**.
-   - Any hijacked `withdraw(drainer, amount)` call immediately **reverts on-chain** with `VaultInPasskeyOnlyMode`.
-2. **Native EIP-7951 (`0x0100`) Hardware Escape Hatch**
-   - Instead of freezing assets (which creates a false-positive DoS vector), users can always recover funds via **TouchID / FaceID WebAuthn (`secp256r1`)** (or WebCrypto P-256 fallback).
-   - The contract binds `chainId`, `vault`, `user`, `safeRecipient`, `amount`, `nonce`, and `deadline` into the hardware-signed challenge and verifies it on-chain through Monad's native **`0x0100` precompile (6,900 gas)**—so even a compromised UI cannot alter the payout address.
+   - The Sentinel fetches actual served JS bundle bytes (`/bundles/vault-action.clean.js` vs simulated hijacked payload `/bundles/vault-action.hijacked.js`), verifies live SHA-256 integrity against on-chain `trustedFrontendHash`, and runs Monad `debug_traceCall (callTracer)` to inspect real withdrawal recipients.
+   - On drift or recipient tampering, it calls `tripBreaker()` via `eth_sendRawTransactionSync`, switching the vault to `PASSKEY_ONLY` in **<1 second (1–2 Monad blocks)**.
+   - Any hijacked `withdraw(drainer, amount)` call immediately **reverts on-chain** (`VaultInPasskeyOnlyMode`).
+2. **Incident Key-Lock Invariant (`PasskeyLockedDuringBreaker`)**
+   - While in `PASSKEY_ONLY` mode, both `registerPasskey()` and `setRecoveryAddress()` **strictly revert on-chain**. A hijacked frontend cannot trick a victim into overwriting their hardware key during an active incident.
+3. **Self-Only / Pre-Bound Payout + Native `0x0100` (EIP-7951) Escape Hatch**
+   - `emergencyWithdrawWithWebAuthn()` and `emergencyWithdrawWithRawP256()` **do not accept an arbitrary frontend-supplied recipient**. Payout is enforced strictly on-chain to `msg.sender` (or a cold wallet pre-bound during `NORMAL` mode), neutralizing pre-signing WYSIWYS recipient tampering even on a compromised UI.
+   - Hardware signatures are verified natively via Monad's **`0x0100` precompile (6,900 gas)**.
 
-## Why Monad?
-- **MIP-12 300ms blocks / 600ms finality + `eth_sendRawTransactionSync`**: Enables sub-second on-chain circuit breaking before victims sign drainer txs (impossible on 12s chains).
-- **Native EIP-7951 (`0x0100`) P-256 precompile**: Verified live on Monad Testnet (`isNativeP256PrecompileActive() == true`, 6,900 gas).
-- **Monad-tuned engineering**: 3-RPC fallback (`testnet-rpc.monad.xyz`, `rpc-testnet.monadinfra.com`, `rpc.ankr.com/monad_testnet`), `debug_traceCall (callTracer)`, and tight `+10%` gas limit buffers respecting Monad's `gas_limit` billing model.
+## Security Model & Production Trust Assumptions
+We explicitly distinguish our **Hackathon Interactive Sandbox** from **Production Mainnet Deployment**:
 
-## Defense Boundary & Business Model
-- **Defense Boundary**:
-  - *Protocol Layer (Live MVP)*: Protects protocol vaults/staking withdrawals (`ZeroDrainVault.sol`).
-  - *Wallet Layer (Roadmap)*: The exact same `0x0100` policy module mounts cleanly as an **EIP-7702 Wallet Guard Hook** to protect external ERC-20 `approve` / `Permit2` flows.
-- **Business Model**: TVL-tiered B2B security SaaS subscription + bonded sentinel alert bounties + DeFi insurance premium discounts.
+| Control Surface | Live Hackathon Sandbox (`pages.dev`) | Production Mainnet Requirement |
+| :--- | :--- | :--- |
+| **Attack Simulation & SRI** | Interactive attack sandbox hashing actual served JS files (`/bundles/vault-action.*.js`) to demonstrate real SHA-256 drift + on-chain breaker without attacking live DNS. | Independent M-of-N bonded sentinels monitoring production CDN/DNS bundles and mempool traces. |
+| **Admin Reset (`restoreNormalMode`)** | API enforces Same-Origin CSRF checks + constant-time `ADMIN_RESET_TOKEN` Bearer auth; `PUBLIC_DEMO_MODE=true` is enabled so hackathon judges can self-test freely using disposable Testnet MON. | Disable `PUBLIC_DEMO_MODE`, remove server-held admin keys, and assign `admin` strictly to a **Safe Multisig + Timelock**. |
+| **Client Key Storage** | **Plan A**: Hardware WebAuthn (`TouchID / FaceID` in Secure Enclave). **Plan B (Demo Fallback)**: Non-extractable WebCrypto `CryptoKey` (`extractable: false`, IndexedDB only; zero private keys in `localStorage`). | Require hardware-backed WebAuthn / hardware wallets and host the Escape Hatch on an independent static/IPFS origin. |
+| **Defense Boundary** | Protocol-level vault withdrawals (`ZeroDrainVault.sol`). | Pair with an **EIP-7702 Wallet Guard Hook** using the same `0x0100` module for external ERC-20 `approve` / `Permit2` protection. |
 
 ## Verified Deployments (Monad Testnet `10143`)
 | Artifact | Reference |
 | :--- | :--- |
 | **Live Web App (Mobile & Desktop, `简 / 繁 / EN`)** | https://zerodrain-monad.pages.dev |
-| **`ZeroDrainVault` Contract** | [`0xbE9e6B77e05a0f345C06d77B1D841f8835B86Af4`](https://testnet.monadvision.com/address/0xbe9e6b77e05a0f345c06d77b1d841f8835b86af4) |
-| **Deployment Tx** | `0x764908a23a8c121423cb0b2fffc598bf13ad0c91039ca665e5712f1d65bcb0a1` |
-| **Foundry Fork Tests** | 8/8 passing on `--fork-url https://testnet-rpc.monad.xyz` |
+| **`ZeroDrainVault` v2 Contract** | [`0xF81E520E4512387a906D22C700d282aF6D3247ab`](https://testnet.monadvision.com/address/0xF81E520E4512387a906D22C700d282aF6D3247ab) |
+| **Deployment Tx** | `0x11dc6f20beec8e3b37ed8a25951836957edba8c1fc47a1900db3b6db82c461a5` |
+| **Anchored Clean Bundle SHA-256** | `0x578f2ffb3fca186b9319a589d4f92909e77689fd2125623965d10f8fc7323207` |
+| **Foundry Fork Tests** | 9/9 passing on `--fork-url https://testnet-rpc.monad.xyz` |
 
-## Project Structure
-- `contracts/` — Foundry project (`ZeroDrainVault.sol`, OpenZeppelin `WebAuthn` & `P256`, Monad Testnet fork tests, deploy script)
-- `web/` — Next.js 15 static frontend (responsive, 3-language i18n, `ox` WebAuthnP256) + native Cloudflare Pages Functions (`web/functions/api/`)
-- `.monskills` — MONSKILLS provenance metadata (`chain=monad-testnet`)
-
-## Quick 30-Second Walkthrough
-1. Open **https://zerodrain-monad.pages.dev** (works out of the box in **Instant Demo** mode without MetaMask, or switch to MetaMask).
-2. **Step 1**: Bind your **TouchID / FaceID** Passkey on-chain (or use the WebCrypto P-256 fallback).
-3. **Step 2**: Click **Simulate Name.com DNS Hijack** -> watch SRI drift, `debug_traceCall`, and sub-second `tripBreaker()` execute live on Monad Testnet.
-4. **Step 3**: Click **Try Hijacked Withdraw** -> verify `VaultInPasskeyOnlyMode` on-chain revert (**0 MON lost**).
-5. **Step 4**: Click **Recover via TouchID / 0x0100** -> verify native EIP-7951 recovery on MonadVision.
+## Project Structure & Local Verification
+- `contracts/` — Foundry project (`ZeroDrainVault.sol`, OpenZeppelin `WebAuthn` & `P256`, 9 Monad Testnet fork tests). Install deps via `forge install --no-git OpenZeppelin/openzeppelin-contracts foundry-rs/forge-std` and run `forge test --fork-url https://testnet-rpc.monad.xyz`.
+- `web/` — Next.js 15 static frontend (`zh-CN` / `zh-TW` / `en`, responsive, `ox` WebAuthnP256 + non-extractable WebCrypto fallback) + Cloudflare Pages Functions (`web/functions/api/`).
+- `.monskills` — MONSKILLS provenance metadata (`chain=monad-testnet`).

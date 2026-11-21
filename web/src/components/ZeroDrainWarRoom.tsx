@@ -38,9 +38,9 @@ import {
   loadStoredWebCrypto,
   signHardwareWebAuthnChallenge,
   signWebCryptoP256Challenge,
+  type NonExtractableWebCryptoHandle,
   type PasskeyMode,
   type StoredWebAuthnCredential,
-  type StoredWebCryptoCredential,
 } from "@/lib/passkey";
 
 interface VaultStatusResponse {
@@ -137,7 +137,7 @@ export default function ZeroDrainWarRoom() {
   const [connectedWallet, setConnectedWallet] = useState<Address | null>(null);
   const [passkeyMode, setPasskeyMode] = useState<PasskeyMode>("webauthn");
   const [storedWebAuthn, setStoredWebAuthn] = useState<StoredWebAuthnCredential | null>(null);
-  const [storedWebCrypto, setStoredWebCrypto] = useState<StoredWebCryptoCredential | null>(null);
+  const [storedWebCrypto, setStoredWebCrypto] = useState<NonExtractableWebCryptoHandle | null>(null);
 
   const [status, setStatus] = useState<VaultStatusResponse | null>(null);
   const [hijacked, setHijacked] = useState(false);
@@ -161,7 +161,7 @@ export default function ZeroDrainWarRoom() {
     const initial = detectInitialLocale();
     setLocale(initial);
     setStoredWebAuthn(loadStoredWebAuthn());
-    setStoredWebCrypto(loadStoredWebCrypto());
+    void loadStoredWebCrypto().then((k) => setStoredWebCrypto(k));
   }, []);
 
   const changeLocale = (next: Locale) => {
@@ -494,7 +494,7 @@ export default function ZeroDrainWarRoom() {
       }
 
       const chRes = await fetch(
-        `/api/vault/challenge?user=${activeUserAddress}&safeRecipient=${activeUserAddress}&amountMon=0.05`,
+        `/api/vault/challenge?user=${activeUserAddress}&amountMon=0.05`,
         { cache: "no-store" }
       );
       const chData = await chRes.json();
@@ -531,7 +531,6 @@ export default function ZeroDrainWarRoom() {
             abi: ZERO_DRAIN_VAULT_ABI,
             functionName: "emergencyWithdrawWithWebAuthn",
             args: [
-              activeUserAddress,
               parseEther("0.05"),
               BigInt(chData.deadline),
               {
@@ -553,7 +552,7 @@ export default function ZeroDrainWarRoom() {
       } else {
         if (!storedWebCrypto) throw new Error("Missing WebCrypto key");
         const { r, s } = await signWebCryptoP256Challenge({
-          privateJwk: storedWebCrypto.privateJwk,
+          privateKey: storedWebCrypto.privateKey,
           challenge: chData.challenge as Hex,
         });
 
@@ -581,7 +580,7 @@ export default function ZeroDrainWarRoom() {
             address: VAULT_ADDRESS,
             abi: ZERO_DRAIN_VAULT_ABI,
             functionName: "emergencyWithdrawWithRawP256",
-            args: [activeUserAddress, parseEther("0.05"), BigInt(chData.deadline), r, s],
+            args: [parseEther("0.05"), BigInt(chData.deadline), r, s],
           });
           const receipt = await publicClient.waitForTransactionReceipt({ hash, pollingInterval: 250 });
           const ms = Date.now() - t0;
@@ -927,23 +926,19 @@ export default function ZeroDrainWarRoom() {
                 </div>
               )}
 
-              {/* STEP 4: Hardware Escape via Monad 0x0100 (or inline 1-tap Bind if another judge tripped first!) */}
+              {/* STEP 4: Hardware Escape via Monad 0x0100 (v2 freezes Passkey mutation during PASSKEY_ONLY!) */}
               {activeStep === 4 && (
                 <div>
                   {!localKeyMatchesChain ? (
                     <>
                       <p className="mb-4 text-sm leading-relaxed text-amber-200">{t.step4NeedBindHint}</p>
                       <button
-                        onClick={handleStep1Setup}
+                        onClick={handleReset}
                         disabled={busy !== null}
                         className="flex w-full items-center justify-center gap-2.5 rounded-2xl bg-violet-600 px-5 py-4 text-base font-bold text-white shadow-lg shadow-violet-600/25 transition hover:bg-violet-500 cursor-pointer disabled:opacity-50"
                       >
-                        <KeyRound className="h-5 w-5" />
-                        {busy === "bind"
-                          ? t.step1Busy
-                          : passkeyMode === "webauthn"
-                          ? t.step1BtnWebAuthn
-                          : t.step1BtnWebCrypto}
+                        <RotateCcw className="h-5 w-5" />
+                        {busy === "reset" ? t.resettingBtn : t.replayBtn}
                       </button>
                     </>
                   ) : (

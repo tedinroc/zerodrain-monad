@@ -1,20 +1,31 @@
 import { encodeFunctionData } from "viem";
 import {
-  CLEAN_MANIFEST_SOURCE,
+  assertControlAuthorized,
+  CLEAN_BUNDLE_SHA256,
+  fetchAndHashServedBundle,
   getServerAccount,
   getVaultAddress,
   jsonResponse,
   sendSignedTxSync,
-  sha256Hex,
   ZERO_DRAIN_VAULT_ABI,
   type PagesContext,
 } from "../../_lib/server";
 
 export async function onRequestPost(context: PagesContext) {
+  // Enforces Same-Origin CSRF + optional ADMIN_RESET_TOKEN Bearer operator auth
+  const denied = assertControlAuthorized(context, true);
+  if (denied) return denied;
+
   try {
     const vaultAddress = getVaultAddress(context.env);
     const adminAccount = getServerAccount(context.env, "DEPLOYER_PRIVATE_KEY");
-    const cleanHash = await sha256Hex(CLEAN_MANIFEST_SOURCE);
+    let cleanHash = CLEAN_BUNDLE_SHA256;
+    try {
+      const cleanManifest = await fetchAndHashServedBundle(context, false);
+      cleanHash = cleanManifest.sriHash;
+    } catch {
+      // use canonical compiled constant
+    }
 
     const data = encodeFunctionData({
       abi: ZERO_DRAIN_VAULT_ABI,
@@ -30,6 +41,7 @@ export async function onRequestPost(context: PagesContext) {
 
     return jsonResponse({
       ok: true,
+      sandboxMode: context.env.PUBLIC_DEMO_MODE === "true",
       txHash: sent.hash,
       blockNumber: sent.blockNumber.toString(),
       latencyMs: sent.latencyMs,

@@ -22,7 +22,7 @@ export const monadTestnet = defineChain({
 });
 
 export const VAULT_ADDRESS = (
-  process.env.NEXT_PUBLIC_VAULT_ADDRESS || "0xbE9e6B77e05a0f345C06d77B1D841f8835B86Af4"
+  process.env.NEXT_PUBLIC_VAULT_ADDRESS || "0xF81E520E4512387a906D22C700d282aF6D3247ab"
 ) as Address;
 
 export const EXPLORER_URL = "https://testnet.monadvision.com";

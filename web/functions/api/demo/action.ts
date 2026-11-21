@@ -6,6 +6,7 @@ import {
   type Hex,
 } from "viem";
 import {
+  assertControlAuthorized,
   DRAINER_ADDRESS,
   getPublicClient,
   getServerAccount,
@@ -63,6 +64,9 @@ function assertBytes32(val: unknown, name: string): Hex {
 }
 
 export async function onRequestPost(context: PagesContext) {
+  const denied = assertControlAuthorized(context, false);
+  if (denied) return denied;
+
   try {
     const body = (await context.request.json()) as DemoActionBody;
     const vaultAddress = getVaultAddress(context.env);
@@ -71,7 +75,6 @@ export async function onRequestPost(context: PagesContext) {
 
     if (body.action === "deposit") {
       const amount = parseSafeDemoAmount(body.amountMon, "0.1");
-      // Anti-abuse cap: prevent spamming deposits that could lower demo wallet below Monad 10 MON reserve
       const currentBal = await publicClient.readContract({
         address: vaultAddress,
         abi: ZERO_DRAIN_VAULT_ABI,
@@ -115,6 +118,34 @@ export async function onRequestPost(context: PagesContext) {
     if (body.action === "registerPasskey") {
       const qx = assertBytes32(body.qx, "qx");
       const qy = assertBytes32(body.qy, "qy");
+      // Check if contract blocks Passkey mutation during PASSKEY_ONLY incident!
+      try {
+        await publicClient.simulateContract({
+          account: demoAccount.address,
+          address: vaultAddress,
+          abi: ZERO_DRAIN_VAULT_ABI,
+          functionName: "registerPasskey",
+          args: [qx, qy],
+        });
+      } catch (simErr) {
+        let errorName = "PasskeyLockedDuringBreaker";
+        if (simErr instanceof BaseError) {
+          const revertErr = simErr.walk((e) => e instanceof ContractFunctionRevertedError);
+          if (revertErr instanceof ContractFunctionRevertedError && revertErr.data?.errorName) {
+            errorName = revertErr.data.errorName;
+          }
+        }
+        return jsonResponse(
+          {
+            ok: false,
+            lockedDuringIncident: errorName === "PasskeyLockedDuringBreaker",
+            errorName,
+            error: "Passkey mutation is frozen on-chain while vault is in PASSKEY_ONLY mode.",
+          },
+          409
+        );
+      }
+
       const data = encodeFunctionData({
         abi: ZERO_DRAIN_VAULT_ABI,
         functionName: "registerPasskey",
@@ -140,7 +171,6 @@ export async function onRequestPost(context: PagesContext) {
       const amount = parseSafeDemoAmount(body.amountMon, "0.05");
       const recipient = body.hijacked ? DRAINER_ADDRESS : demoAccount.address;
 
-      // Pre-simulate to deterministically surface VaultInPasskeyOnlyMode revert on-chain
       try {
         await publicClient.simulateContract({
           account: demoAccount.address,
@@ -168,13 +198,15 @@ export async function onRequestPost(context: PagesContext) {
         });
       }
 
-      // Safety guard: never send real demo MON to DRAINER_ADDRESS if someone curls while NORMAL
       if (body.hijacked) {
-        return jsonResponse({
-          ok: false,
-          blockedOnChain: false,
-          error: "Circuit breaker is currently NORMAL; trigger Step 2 DNS hijack first to test on-chain blocking.",
-        }, 400);
+        return jsonResponse(
+          {
+            ok: false,
+            blockedOnChain: false,
+            error: "Circuit breaker is currently NORMAL; trigger Step 2 DNS hijack first to test on-chain blocking.",
+          },
+          400
+        );
       }
 
       const data = encodeFunctionData({
@@ -205,11 +237,11 @@ export async function onRequestPost(context: PagesContext) {
       const amount = parseSafeDemoAmount(body.amountMon, "0.05");
       const r = assertBytes32(body.auth?.r, "auth.r");
       const s = assertBytes32(body.auth?.s, "auth.s");
+      // v2: payout target is enforced strictly on-chain as getLockedRecoveryAddress(msg.sender)
       const data = encodeFunctionData({
         abi: ZERO_DRAIN_VAULT_ABI,
         functionName: "emergencyWithdrawWithWebAuthn",
         args: [
-          demoAccount.address,
           amount,
           BigInt(body.deadline),
           {
@@ -244,10 +276,11 @@ export async function onRequestPost(context: PagesContext) {
       const amount = parseSafeDemoAmount(body.amountMon, "0.05");
       const r = assertBytes32(body.r, "r");
       const s = assertBytes32(body.s, "s");
+      // v2: payout target is enforced strictly on-chain as getLockedRecoveryAddress(msg.sender)
       const data = encodeFunctionData({
         abi: ZERO_DRAIN_VAULT_ABI,
         functionName: "emergencyWithdrawWithRawP256",
-        args: [demoAccount.address, amount, BigInt(body.deadline), r, s],
+        args: [amount, BigInt(body.deadline), r, s],
       });
 
       const sent = await sendSignedTxSync({

@@ -55,6 +55,13 @@ export const ZERO_DRAIN_VAULT_ABI = [
   },
   {
     type: "function",
+    name: "getLockedRecoveryAddress",
+    inputs: [{ name: "user", type: "address", internalType: "address" }],
+    outputs: [{ name: "", type: "address", internalType: "address payable" }],
+    stateMutability: "view",
+  },
+  {
+    type: "function",
     name: "trustedFrontendHash",
     inputs: [],
     outputs: [{ name: "", type: "bytes32", internalType: "bytes32" }],
@@ -89,7 +96,6 @@ export const ZERO_DRAIN_VAULT_ABI = [
     name: "computeRecoveryChallenge",
     inputs: [
       { name: "user", type: "address", internalType: "address" },
-      { name: "safeRecipient", type: "address", internalType: "address" },
       { name: "amount", type: "uint256", internalType: "uint256" },
       { name: "nonce", type: "uint256", internalType: "uint256" },
       { name: "deadline", type: "uint256", internalType: "uint256" },
@@ -118,6 +124,13 @@ export const ZERO_DRAIN_VAULT_ABI = [
       { name: "qx", type: "bytes32", internalType: "bytes32" },
       { name: "qy", type: "bytes32", internalType: "bytes32" },
     ],
+    outputs: [],
+    stateMutability: "nonpayable",
+  },
+  {
+    type: "function",
+    name: "setRecoveryAddress",
+    inputs: [{ name: "_recovery", type: "address", internalType: "address payable" }],
     outputs: [],
     stateMutability: "nonpayable",
   },
@@ -152,7 +165,6 @@ export const ZERO_DRAIN_VAULT_ABI = [
     type: "function",
     name: "emergencyWithdrawWithWebAuthn",
     inputs: [
-      { name: "safeRecipient", type: "address", internalType: "address payable" },
       { name: "amount", type: "uint256", internalType: "uint256" },
       { name: "deadline", type: "uint256", internalType: "uint256" },
       {
@@ -176,7 +188,6 @@ export const ZERO_DRAIN_VAULT_ABI = [
     type: "function",
     name: "emergencyWithdrawWithRawP256",
     inputs: [
-      { name: "safeRecipient", type: "address", internalType: "address payable" },
       { name: "amount", type: "uint256", internalType: "uint256" },
       { name: "deadline", type: "uint256", internalType: "uint256" },
       { name: "r", type: "bytes32", internalType: "bytes32" },
@@ -186,65 +197,6 @@ export const ZERO_DRAIN_VAULT_ABI = [
     stateMutability: "nonpayable",
   },
   {
-    type: "event",
-    name: "Deposited",
-    inputs: [
-      { name: "user", type: "address", indexed: true },
-      { name: "amount", type: "uint256", indexed: false },
-      { name: "newBalance", type: "uint256", indexed: false },
-    ],
-  },
-  {
-    type: "event",
-    name: "PasskeyRegistered",
-    inputs: [
-      { name: "user", type: "address", indexed: true },
-      { name: "qx", type: "bytes32", indexed: false },
-      { name: "qy", type: "bytes32", indexed: false },
-    ],
-  },
-  {
-    type: "event",
-    name: "Withdrawn",
-    inputs: [
-      { name: "user", type: "address", indexed: true },
-      { name: "recipient", type: "address", indexed: true },
-      { name: "amount", type: "uint256", indexed: false },
-    ],
-  },
-  {
-    type: "event",
-    name: "BreakerTripped",
-    inputs: [
-      { name: "triggeredBy", type: "address", indexed: true },
-      { name: "detectedHash", type: "bytes32", indexed: true },
-      { name: "blockNumber", type: "uint256", indexed: false },
-      { name: "timestamp", type: "uint256", indexed: false },
-      { name: "reason", type: "string", indexed: false },
-    ],
-  },
-  {
-    type: "event",
-    name: "ModeRestored",
-    inputs: [
-      { name: "restoredBy", type: "address", indexed: true },
-      { name: "trustedHash", type: "bytes32", indexed: true },
-      { name: "blockNumber", type: "uint256", indexed: false },
-    ],
-  },
-  {
-    type: "event",
-    name: "EmergencyWithdrawn",
-    inputs: [
-      { name: "user", type: "address", indexed: true },
-      { name: "safeRecipient", type: "address", indexed: true },
-      { name: "amount", type: "uint256", indexed: false },
-      { name: "nonce", type: "uint256", indexed: false },
-      { name: "method", type: "string", indexed: false },
-      { name: "userVerified", type: "bool", indexed: false },
-    ],
-  },
-  {
     type: "error",
     name: "VaultInPasskeyOnlyMode",
     inputs: [
@@ -252,6 +204,8 @@ export const ZERO_DRAIN_VAULT_ABI = [
       { name: "trippedBlock", type: "uint256" },
     ],
   },
+  { type: "error", name: "PasskeyLockedDuringBreaker", inputs: [] },
+  { type: "error", name: "RecoveryAddressLockedDuringBreaker", inputs: [] },
   { type: "error", name: "Unauthorized", inputs: [] },
   { type: "error", name: "InvalidAddress", inputs: [] },
   { type: "error", name: "InvalidAmount", inputs: [] },

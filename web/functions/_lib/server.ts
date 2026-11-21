@@ -15,7 +15,10 @@ import { ZERO_DRAIN_VAULT_ABI } from "../../src/lib/abi";
 export { ZERO_DRAIN_VAULT_ABI };
 
 export interface Env {
+  ASSETS?: { fetch: (input: RequestInfo | URL) => Promise<Response> };
   NEXT_PUBLIC_VAULT_ADDRESS?: string;
+  PUBLIC_DEMO_MODE?: string;
+  ADMIN_RESET_TOKEN?: string;
   DEPLOYER_PRIVATE_KEY?: string;
   SENTINEL_PRIVATE_KEY?: string;
 }
@@ -27,11 +30,12 @@ export interface PagesContext {
 
 export const DRAINER_ADDRESS = "0xdeadbeef0000000000000000000000000000bad1" as const;
 
-export const CLEAN_MANIFEST_SOURCE =
-  "zerodrain-monad-staking-ui:v1.0.0:action=withdraw(self):integrity=verified";
+export const CLEAN_BUNDLE_PATH = "/bundles/vault-action.clean.js";
+export const HIJACKED_BUNDLE_PATH = "/bundles/vault-action.hijacked.js";
 
-export const HIJACKED_MANIFEST_SOURCE =
-  "zerodrain-monad-staking-ui:v1.0.0:action=withdraw(0xdeadbeef0000000000000000000000000000bad1):DNS_HIJACKED_DRAINER";
+// Fallback byte-exact SHA-256 of public/bundles/vault-action.clean.js
+export const CLEAN_BUNDLE_SHA256: Hex =
+  "0x578f2ffb3fca186b9319a589d4f92909e77689fd2125623965d10f8fc7323207";
 
 export const MONAD_TESTNET_RPCS = [
   "https://testnet-rpc.monad.xyz",
@@ -51,7 +55,7 @@ export const monadTestnet = defineChain({
 });
 
 export function getVaultAddress(env: Env): Address {
-  return (env.NEXT_PUBLIC_VAULT_ADDRESS || "0xbE9e6B77e05a0f345C06d77B1D841f8835B86Af4") as Address;
+  return (env.NEXT_PUBLIC_VAULT_ADDRESS || "0xF81E520E4512387a906D22C700d282aF6D3247ab") as Address;
 }
 
 export function getPublicClient() {
@@ -77,8 +81,58 @@ export function getServerAccount(
   return privateKeyToAccount(pk as Hex);
 }
 
-export async function sha256Hex(payload: string): Promise<Hex> {
-  const bytes = new TextEncoder().encode(payload);
+function constantTimeEqual(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) {
+    diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  }
+  return diff === 0;
+}
+
+/**
+ * Enforces Same-Origin CSRF protection + optional Operator Bearer Auth.
+ * - Cross-origin browser POSTs are always rejected (403).
+ * - If ADMIN_RESET_TOKEN is configured or PUBLIC_DEMO_MODE !== "true", requires
+ *   constant-time `Authorization: Bearer <ADMIN_RESET_TOKEN>` header.
+ * - In PUBLIC_DEMO_MODE="true" (without ADMIN_RESET_TOKEN), same-origin judge browser
+ *   interactions are allowed for self-service hackathon testing.
+ */
+export function assertControlAuthorized(
+  context: PagesContext,
+  requireOperatorAuth: boolean
+): Response | null {
+  const reqUrl = new URL(context.request.url);
+  const origin = context.request.headers.get("origin");
+  const secFetchSite = context.request.headers.get("sec-fetch-site");
+
+  if (origin && origin !== reqUrl.origin) {
+    return jsonResponse({ ok: false, error: "Forbidden: cross-origin control request rejected" }, 403);
+  }
+  if (secFetchSite && secFetchSite !== "same-origin" && secFetchSite !== "none") {
+    return jsonResponse({ ok: false, error: "Forbidden: invalid Sec-Fetch-Site header" }, 403);
+  }
+
+  const configuredToken = (context.env.ADMIN_RESET_TOKEN || "").trim();
+  const isPublicDemo = context.env.PUBLIC_DEMO_MODE === "true";
+
+  if (requireOperatorAuth && (configuredToken.length > 0 || !isPublicDemo)) {
+    const authHeader = context.request.headers.get("authorization") || "";
+    const provided = authHeader.startsWith("Bearer ") ? authHeader.slice(7).trim() : "";
+    if (!configuredToken || !provided || !constantTimeEqual(provided, configuredToken)) {
+      return jsonResponse(
+        {
+          ok: false,
+          error: "Unauthorized: operator Bearer token required (production requires Safe Multisig + Timelock)",
+        },
+        401
+      );
+    }
+  }
+  return null;
+}
+
+export async function sha256BytesHex(bytes: ArrayBuffer): Promise<Hex> {
   const digest = await crypto.subtle.digest("SHA-256", bytes);
   const hex = Array.from(new Uint8Array(digest))
     .map((b) => b.toString(16).padStart(2, "0"))
@@ -86,17 +140,35 @@ export async function sha256Hex(payload: string): Promise<Hex> {
   return `0x${hex}`;
 }
 
-export async function buildManifestPayload(hijacked: boolean) {
-  const source = hijacked ? HIJACKED_MANIFEST_SOURCE : CLEAN_MANIFEST_SOURCE;
-  const sriHash = await sha256Hex(source);
+/**
+ * Fetches the ACTUAL served static JS bundle from Cloudflare Pages Assets and computes its real SHA-256 SRI hash.
+ */
+export async function fetchAndHashServedBundle(context: PagesContext, hijacked: boolean) {
+  const bundlePath = hijacked ? HIJACKED_BUNDLE_PATH : CLEAN_BUNDLE_PATH;
+  const assetUrl = new URL(bundlePath, context.request.url);
+
+  let res: Response;
+  if (context.env.ASSETS) {
+    res = await context.env.ASSETS.fetch(assetUrl);
+  } else {
+    res = await fetch(assetUrl);
+  }
+  if (!res.ok) {
+    throw new Error(`Failed to fetch served asset ${bundlePath} (HTTP ${res.status})`);
+  }
+
+  const buffer = await res.arrayBuffer();
+  const sriHash = await sha256BytesHex(buffer);
+
   return {
     hijacked,
-    version: "v1.0.0",
+    sandboxNotice: "Interactive Attack Sandbox: compares live SHA-256 of actual served JS bundle bytes against on-chain trustedFrontendHash",
+    version: "v2.0.0",
+    bundlePath,
+    bundleBytes: buffer.byteLength,
     dnsProvider: hijacked
-      ? "name.com (HIJACKED A-RECORD -> 185.220.x.x)"
-      : "cloudflare-dnssec (VERIFIED)",
-    bundleName: hijacked ? "staking-bundle.4f9a.injected.js" : "staking-bundle.8f7d.clean.js",
-    source,
+      ? "Simulated Name.com Hijack (served vault-action.hijacked.js)"
+      : "Cloudflare Pages Edge (served vault-action.clean.js)",
     sriHash,
     withdrawRecipientOverride: hijacked ? DRAINER_ADDRESS : null,
     checkedAt: new Date().toISOString(),

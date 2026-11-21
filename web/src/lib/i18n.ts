@@ -165,8 +165,8 @@ export const DICTIONARIES: Record<Locale, Dictionary> = {
     blockedTargetLabel: "被阻断的黑客地址",
     blockedLossValue: "资产损失: 0 MON",
 
-    step4Hint: "安全收款地址与金额已被密码学锁死在硬件签名挑战中，即使前端仍被劫持，黑客也无法篡改。",
-    step4NeedBindHint: "当前设备尚未绑定与链上匹配的硬件密钥（可能由其他评委刚测试过），点下方一键绑定本机密钥即可继续逃生！",
+    step4Hint: "合约层强制锁死只向本人地址（或 NORMAL 期预绑定的冷钱包）放款——前端根本无法传入任意收款人，彻底化解签名前 WYSIWYS 篡改！",
+    step4NeedBindHint: "🔒 安全机制生效：熔断期间合约已彻底冻结 Passkey 更换（防止被劫持前端诱骗覆盖密钥）。点击下方重置后即可绑定本机密钥开始演练。",
     step4BtnWebAuthn: "按 TouchID / FaceID 经 0x0100 安全取回",
     step4BtnWebCrypto: "用 P-256 经 0x0100 预编译安全取回",
     step4Busy: "等待硬件签名与 0x0100 链上验签...",
@@ -277,8 +277,8 @@ export const DICTIONARIES: Record<Locale, Dictionary> = {
     blockedTargetLabel: "遭阻斷的駭客地址",
     blockedLossValue: "資產損失: 0 MON",
 
-    step4Hint: "安全收款地址與金額已被密碼學鎖死在硬體簽名挑戰中，即使前端仍被劫持，駭客也無法竄改。",
-    step4NeedBindHint: "目前裝置尚未綁定與鏈上相符的硬體密鑰（可能由其他評委剛測試過），點下方一鍵綁定本機密鑰即可繼續逃生！",
+    step4Hint: "合約層強制鎖死只向本人地址（或 NORMAL 期預綁定的冷錢包）放款——前端根本無法傳入任意收款人，徹底化解簽署前 WYSIWYS 竄改！",
+    step4NeedBindHint: "🔒 安全機制生效：熔斷期間合約已徹底凍結 Passkey 更換（防止被劫持前端誘騙覆寫密鑰）。點擊下方重置後即可綁定本機密鑰開始演練。",
     step4BtnWebAuthn: "按 TouchID / FaceID 經 0x0100 安全取回",
     step4BtnWebCrypto: "用 P-256 經 0x0100 預編譯安全取回",
     step4Busy: "等待硬體簽名與 0x0100 鏈上驗簽...",
@@ -389,8 +389,8 @@ export const DICTIONARIES: Record<Locale, Dictionary> = {
     blockedTargetLabel: "Blocked Attacker",
     blockedLossValue: "Funds Lost: 0 MON",
 
-    step4Hint: "Safe recipient & amount are cryptographically bound into the Passkey challenge—even a hijacked UI cannot swap them.",
-    step4NeedBindHint: "Your device Passkey isn't bound on-chain yet (another tester may have just used the shared demo). Bind your device key in 1 tap to complete the 0x0100 escape!",
+    step4Hint: "Payout is enforced on-chain strictly to msg.sender (or a pre-bound cold recovery wallet)—even a compromised UI cannot inject an attacker recipient before signing!",
+    step4NeedBindHint: "🔒 Security Invariant Active: Passkey mutation is strictly frozen on-chain during PASSKEY_ONLY incidents (prevents hijack key-overwrite). Click Reset to bind your own device key cleanly.",
     step4BtnWebAuthn: "Recover 0.05 MON via TouchID / 0x0100",
     step4BtnWebCrypto: "Recover 0.05 MON via P-256 / 0x0100",
     step4Busy: "Verifying via Monad 0x0100...",

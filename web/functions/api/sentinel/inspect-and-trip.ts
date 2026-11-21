@@ -1,7 +1,8 @@
 import { encodeFunctionData, formatEther, isAddress, parseEther, type Address } from "viem";
 import {
-  buildManifestPayload,
+  assertControlAuthorized,
   DRAINER_ADDRESS,
+  fetchAndHashServedBundle,
   getPublicClient,
   getServerAccount,
   getVaultAddress,
@@ -13,6 +14,9 @@ import {
 } from "../../_lib/server";
 
 export async function onRequestPost(context: PagesContext) {
+  const denied = assertControlAuthorized(context, true);
+  if (denied) return denied;
+
   try {
     const body = (await context.request.json()) as {
       hijacked?: boolean;
@@ -33,7 +37,8 @@ export async function onRequestPost(context: PagesContext) {
         : demoAccount.address;
 
     const amountWei = parseEther(body.amountMon || "0.05");
-    const manifest = await buildManifestPayload(hijacked);
+    // Real SHA-256 over the ACTUAL served static JS bundle bytes
+    const manifest = await fetchAndHashServedBundle(context, hijacked);
 
     const [trustedHash, currentMode] = await Promise.all([
       publicClient.readContract({
@@ -90,7 +95,7 @@ export async function onRequestPost(context: PagesContext) {
           functionName: "tripBreaker",
           args: [
             manifest.sriHash,
-            `DNS_HIJACK_SRI_DRIFT_AND_DRAINER_REDIRECT(${DRAINER_ADDRESS.slice(0, 10)})`,
+            `SERVED_BUNDLE_SRI_DRIFT(${manifest.bundlePath})_AND_DRAINER(${DRAINER_ADDRESS.slice(0, 10)})`,
           ],
         });
         const sent = await sendSignedTxSync({
@@ -110,13 +115,15 @@ export async function onRequestPost(context: PagesContext) {
 
     return jsonResponse({
       ok: true,
+      sandboxMode: context.env.PUBLIC_DEMO_MODE === "true",
       threatDetected,
       sriCheck: {
         trustedHash,
         liveHash: manifest.sriHash,
         mismatch: sriMismatch,
         dnsProvider: manifest.dnsProvider,
-        bundleName: manifest.bundleName,
+        bundleName: manifest.bundlePath,
+        bundleBytes: manifest.bundleBytes,
       },
       calldataDiff: {
         functionName: "withdraw(address recipient, uint256 amount)",
