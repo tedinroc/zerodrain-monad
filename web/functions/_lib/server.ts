@@ -113,6 +113,22 @@ export function getServerAccount(
   return privateKeyToAccount(pk as Hex);
 }
 
+/**
+ * Safely derives the server account address when configured, or returns null in keyless read-only deployments.
+ */
+export function getOptionalServerAddress(
+  env: Env,
+  key: "DEPLOYER_PRIVATE_KEY" | "SENTINEL_PRIVATE_KEY"
+): Address | null {
+  const pk = env[key];
+  if (!pk || !pk.startsWith("0x")) return null;
+  try {
+    return privateKeyToAccount(pk as Hex).address;
+  } catch {
+    return null;
+  }
+}
+
 function constantTimeEqual(a: string, b: string): boolean {
   if (a.length !== b.length) return false;
   let diff = 0;

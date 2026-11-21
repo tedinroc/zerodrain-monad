@@ -149,6 +149,7 @@ export default function ZeroDrainWarRoom() {
   const [storedWebCrypto, setStoredWebCrypto] = useState<NonExtractableWebCryptoHandle | null>(null);
 
   const [status, setStatus] = useState<VaultStatusResponse | null>(null);
+  const [statusError, setStatusError] = useState(false);
   const [hijacked, setHijacked] = useState(false);
   const [inspection, setInspection] = useState<SentinelInspection | null>(null);
   const [blockedAlert, setBlockedAlert] = useState<{
@@ -157,8 +158,11 @@ export default function ZeroDrainWarRoom() {
   } | null>(null);
   const [recoveryProof, setRecoveryProof] = useState<{
     txHash: string;
+    blockNumber: string;
     latencyMs: number;
     gasUsed: string;
+    amountMon: string;
+    lockedRecipient: string;
   } | null>(null);
 
   const [busy, setBusy] = useState<string | null>(null);
@@ -214,9 +218,12 @@ export default function ZeroDrainWarRoom() {
         }
         prevModeRef.current = data.mode;
         setStatus(data);
+        setStatusError(false);
+      } else {
+        setStatusError(true);
       }
     } catch {
-      // ignore transient network hiccup
+      if (reqId === fetchIdRef.current) setStatusError(true);
     }
   }, [walletMode, connectedWallet]);
 
@@ -350,18 +357,8 @@ export default function ZeroDrainWarRoom() {
       }
 
       if (walletMode === "demo") {
-        // Ensure vault has >= 0.05 MON automatically for frictionless judge testing
-        if (!hasBalance) {
-          const depRes = await fetch("/api/demo/action", {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({ action: "deposit", amountMon: "0.1" }),
-          });
-          const depData = await depRes.json();
-          if (depData.ok) {
-            pushLog({ kind: "safe", label: t.logDeposit, txHash: depData.txHash, latencyMs: depData.latencyMs });
-          }
-        }
+        // P0: ALWAYS bind Passkey FIRST before depositing so we never deposit into a PASSKEY_ONLY vault
+        // whose key-binding is frozen on-chain!
         const res = await fetch("/api/demo/action", {
           method: "POST",
           headers: { "content-type": "application/json" },
@@ -375,6 +372,19 @@ export default function ZeroDrainWarRoom() {
           txHash: data.txHash,
           latencyMs: data.latencyMs,
         });
+
+        // Only after on-chain Passkey registration succeeds, ensure vault has >= 0.05 MON
+        if (!hasBalance) {
+          const depRes = await fetch("/api/demo/action", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ action: "deposit", amountMon: "0.1" }),
+          });
+          const depData = await depRes.json();
+          if (depData.ok && depData.txHash) {
+            pushLog({ kind: "safe", label: t.logDeposit, txHash: depData.txHash, latencyMs: depData.latencyMs });
+          }
+        }
         setToast({ type: "ok", text: t.toastBindOk(data.latencyMs) });
       } else {
         const t0 = Date.now();
@@ -565,7 +575,14 @@ export default function ZeroDrainWarRoom() {
           });
           const data = await res.json();
           if (!data.ok) throw new Error(data.error);
-          setRecoveryProof({ txHash: data.txHash, latencyMs: data.latencyMs, gasUsed: data.gasUsed });
+          setRecoveryProof({
+            txHash: data.txHash,
+            blockNumber: String(data.blockNumber || ""),
+            latencyMs: data.latencyMs,
+            gasUsed: String(data.gasUsed || "0"),
+            amountMon: "0.05",
+            lockedRecipient: String(chData.lockedRecipient || activeUserAddress),
+          });
           pushLog({ kind: "safe", label: t.logEscapedWebAuthn, txHash: data.txHash, latencyMs: data.latencyMs });
           setToast({ type: "ok", text: t.toastRecoveredOk(data.latencyMs) });
         } else {
@@ -589,8 +606,16 @@ export default function ZeroDrainWarRoom() {
             ],
           });
           const receipt = await publicClient.waitForTransactionReceipt({ hash, pollingInterval: 250 });
+          if (receipt.status !== "success") throw new Error("Recovery transaction reverted on-chain");
           const ms = Date.now() - t0;
-          setRecoveryProof({ txHash: hash, latencyMs: ms, gasUsed: receipt.gasUsed.toString() });
+          setRecoveryProof({
+            txHash: hash,
+            blockNumber: receipt.blockNumber.toString(),
+            latencyMs: ms,
+            gasUsed: receipt.gasUsed.toString(),
+            amountMon: "0.05",
+            lockedRecipient: String(chData.lockedRecipient || activeUserAddress),
+          });
           pushLog({ kind: "safe", label: t.logEscapedWebAuthn, txHash: hash, latencyMs: ms });
           setToast({ type: "ok", text: t.toastRecoveredOk(ms) });
         }
@@ -615,7 +640,14 @@ export default function ZeroDrainWarRoom() {
           });
           const data = await res.json();
           if (!data.ok) throw new Error(data.error);
-          setRecoveryProof({ txHash: data.txHash, latencyMs: data.latencyMs, gasUsed: data.gasUsed });
+          setRecoveryProof({
+            txHash: data.txHash,
+            blockNumber: String(data.blockNumber || ""),
+            latencyMs: data.latencyMs,
+            gasUsed: String(data.gasUsed || "0"),
+            amountMon: "0.05",
+            lockedRecipient: String(chData.lockedRecipient || activeUserAddress),
+          });
           pushLog({ kind: "safe", label: t.logEscapedWebCrypto, txHash: data.txHash, latencyMs: data.latencyMs });
           setToast({ type: "ok", text: t.toastRecoveredOk(data.latencyMs) });
         } else {
@@ -628,8 +660,16 @@ export default function ZeroDrainWarRoom() {
             args: [parseEther("0.05"), BigInt(chData.deadline), r, s],
           });
           const receipt = await publicClient.waitForTransactionReceipt({ hash, pollingInterval: 250 });
+          if (receipt.status !== "success") throw new Error("Recovery transaction reverted on-chain");
           const ms = Date.now() - t0;
-          setRecoveryProof({ txHash: hash, latencyMs: ms, gasUsed: receipt.gasUsed.toString() });
+          setRecoveryProof({
+            txHash: hash,
+            blockNumber: receipt.blockNumber.toString(),
+            latencyMs: ms,
+            gasUsed: receipt.gasUsed.toString(),
+            amountMon: "0.05",
+            lockedRecipient: String(chData.lockedRecipient || activeUserAddress),
+          });
           pushLog({ kind: "safe", label: t.logEscapedWebCrypto, txHash: hash, latencyMs: ms });
           setToast({ type: "ok", text: t.toastRecoveredOk(ms) });
         }
@@ -1021,6 +1061,18 @@ export default function ZeroDrainWarRoom() {
                         <RotateCcw className="h-5 w-5" />
                         {busy === "reset" ? t.resettingBtn : t.replayBtn}
                       </button>
+                      {status && Number(status.emergencyRecoveryCount) > 0 && (
+                        <a
+                          href={`${EXPLORER_URL}/address/${VAULT_ADDRESS}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="mt-3 flex w-full items-center justify-center gap-1.5 rounded-xl border border-emerald-400/30 bg-emerald-950/30 px-3 py-2.5 text-xs font-semibold text-emerald-300 hover:bg-emerald-950/50"
+                        >
+                          <CheckCircle2 className="h-3.5 w-3.5" />
+                          {t.viewVerifiedRecoveries(status.emergencyRecoveryCount)}
+                          <ExternalLink className="h-3 w-3" />
+                        </a>
+                      )}
                     </>
                   ) : !hasBalance && walletMode === "metamask" ? (
                     <>
@@ -1089,8 +1141,16 @@ export default function ZeroDrainWarRoom() {
                     <span className="rounded-lg bg-violet-500/20 px-2.5 py-1 text-violet-200">
                       {recoveryProof.latencyMs} ms
                     </span>
+                    {recoveryProof.blockNumber ? (
+                      <span className="rounded-lg bg-white/10 px-2.5 py-1 text-zinc-200">
+                        #{Number(recoveryProof.blockNumber).toLocaleString()}
+                      </span>
+                    ) : null}
                     <span className="rounded-lg bg-emerald-500/20 px-2.5 py-1 text-emerald-200">
-                      0x0100 · 6,900 gas
+                      {recoveryProof.amountMon} MON → {shortAddr(recoveryProof.lockedRecipient)}
+                    </span>
+                    <span className="rounded-lg bg-emerald-500/15 px-2.5 py-1 text-emerald-200">
+                      Tx {Number(recoveryProof.gasUsed).toLocaleString()} gas · {t.verifyGasLabel}
                     </span>
                     <a
                       href={`${EXPLORER_URL}/tx/${recoveryProof.txHash}`}
@@ -1157,10 +1217,22 @@ export default function ZeroDrainWarRoom() {
                     <div className="text-xs font-semibold text-zinc-300">{t.rowSriTitle}</div>
                     <div
                       className={`mt-0.5 truncate text-xs ${
-                        hijacked || isTripped ? "font-semibold text-red-300" : "text-emerald-300"
+                        !status
+                          ? statusError
+                            ? "text-amber-300"
+                            : "text-zinc-400"
+                          : hijacked || isTripped
+                          ? "font-semibold text-red-300"
+                          : "text-emerald-300"
                       }`}
                     >
-                      {hijacked || isTripped ? t.rowSriDrift : t.rowSriOk}
+                      {!status
+                        ? statusError
+                          ? t.rpcUnavailable
+                          : "--"
+                        : hijacked || isTripped
+                        ? t.rowSriDrift
+                        : t.rowSriOk}
                     </div>
                   </div>
                   <span className="shrink-0 font-mono text-[11px] text-zinc-500">
@@ -1178,10 +1250,22 @@ export default function ZeroDrainWarRoom() {
                     <div className="text-xs font-semibold text-zinc-300">{t.rowTraceTitle}</div>
                     <div
                       className={`mt-0.5 truncate font-mono text-xs ${
-                        hijacked || isTripped ? "font-bold text-red-300" : "text-emerald-300"
+                        !status
+                          ? statusError
+                            ? "text-amber-300"
+                            : "text-zinc-400"
+                          : hijacked || isTripped
+                          ? "font-bold text-red-300"
+                          : "text-emerald-300"
                       }`}
                     >
-                      {hijacked || isTripped ? t.rowTraceHijacked : t.rowTraceOk}
+                      {!status
+                        ? statusError
+                          ? t.rpcUnavailable
+                          : "--"
+                        : hijacked || isTripped
+                        ? t.rowTraceHijacked
+                        : t.rowTraceOk}
                     </div>
                   </div>
                   {inspection?.calldataDiff.traceLatencyMs ? (
@@ -1191,34 +1275,62 @@ export default function ZeroDrainWarRoom() {
                   ) : null}
                 </div>
 
-                {/* Row 3: Sub-Second Breaker */}
+                {/* Row 3: On-Chain Breaker (ONLY measured latency or actual tripped block — NEVER unmeasured placeholders!) */}
                 <div className="flex items-center justify-between gap-3 px-3.5 py-3">
                   <div className="min-w-0">
                     <div className="text-xs font-semibold text-zinc-300">{t.rowBreakerTitle}</div>
                     <div
                       className={`mt-0.5 truncate text-xs ${
-                        isTripped ? "font-bold text-red-300" : "text-zinc-400"
+                        !status
+                          ? "text-amber-300"
+                          : isTripped
+                          ? "font-bold text-red-300"
+                          : "text-zinc-400"
                       }`}
                     >
-                      {isTripped ? t.rowBreakerTripped : t.rowBreakerStandby}
+                      {!status
+                        ? statusError
+                          ? t.rpcUnavailable
+                          : "--"
+                        : isTripped
+                        ? t.rowBreakerTripped
+                        : t.rowBreakerStandby}
                     </div>
                   </div>
                   <span className="shrink-0 font-mono text-xs font-bold text-violet-300">
                     {inspection?.breakerTx && inspection.breakerTx.latencyMs > 0
                       ? `${inspection.breakerTx.latencyMs} ms`
-                      : isTripped
-                      ? "< 600 ms"
-                      : "300 ms"}
+                      : isTripped && status?.trippedBlock
+                      ? `#${Number(status.trippedBlock).toLocaleString()}`
+                      : "--"}
                   </span>
                 </div>
 
-                {/* Row 4: Native 0x0100 Precompile */}
+                {/* Row 4: Native 0x0100 Precompile (Honest RPC state!) */}
                 <div className="flex items-center justify-between gap-3 px-3.5 py-3">
                   <div className="min-w-0">
                     <div className="text-xs font-semibold text-zinc-300">{t.rowPrecompileTitle}</div>
-                    <div className="mt-0.5 text-xs text-emerald-300">{t.rowPrecompileActive}</div>
+                    <div
+                      className={`mt-0.5 text-xs ${
+                        status?.precompile0x0100Active
+                          ? "text-emerald-300"
+                          : statusError
+                          ? "text-amber-300"
+                          : "text-zinc-400"
+                      }`}
+                    >
+                      {status?.precompile0x0100Active
+                        ? t.rowPrecompileActive
+                        : statusError
+                        ? t.rpcUnavailable
+                        : "--"}
+                    </div>
                   </div>
-                  <Cpu className="h-4 w-4 shrink-0 text-emerald-400" />
+                  <Cpu
+                    className={`h-4 w-4 shrink-0 ${
+                      status?.precompile0x0100Active ? "text-emerald-400" : "text-zinc-500"
+                    }`}
+                  />
                 </div>
               </div>
 

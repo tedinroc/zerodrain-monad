@@ -1,8 +1,8 @@
 import { isAddress, parseEther, type Address } from "viem";
 import {
   BadRequestError,
+  getOptionalServerAddress,
   getPublicClient,
-  getServerAccount,
   getVaultAddress,
   jsonResponse,
   ZERO_DRAIN_VAULT_ABI,
@@ -30,8 +30,21 @@ export async function onRequestGet(context: PagesContext) {
 
     const vaultAddress = getVaultAddress(context.env);
     const publicClient = getPublicClient();
-    const demoAccount = getServerAccount(context.env, "DEPLOYER_PRIVATE_KEY");
-    const user: Address = queryUser ? (queryUser as Address) : demoAccount.address;
+
+    // P1 Read-Only Mode Support: works with ZERO server signing keys via public RPC + on-chain admin fallback!
+    let user: Address;
+    if (queryUser) {
+      user = queryUser as Address;
+    } else {
+      const configuredDemoAddr = getOptionalServerAddress(context.env, "DEPLOYER_PRIVATE_KEY");
+      user =
+        configuredDemoAddr ??
+        (await publicClient.readContract({
+          address: vaultAddress,
+          abi: ZERO_DRAIN_VAULT_ABI,
+          functionName: "admin",
+        }));
+    }
 
     const deadline = BigInt(Math.floor(Date.now() / 1000) + 600);
 

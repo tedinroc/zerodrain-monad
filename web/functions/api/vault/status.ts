@@ -1,7 +1,7 @@
 import { formatEther, isAddress, type Address } from "viem";
 import {
+  getOptionalServerAddress,
   getPublicClient,
-  getServerAccount,
   getVaultAddress,
   jsonResponse,
   ZERO_DRAIN_VAULT_ABI,
@@ -15,11 +15,34 @@ export async function onRequestGet(context: PagesContext) {
     if (queryUser && !isAddress(queryUser)) {
       return jsonResponse({ ok: false, error: "Invalid user address parameter" }, 400);
     }
+
     const vaultAddress = getVaultAddress(context.env);
     const publicClient = getPublicClient();
-    const demoAccount = getServerAccount(context.env, "DEPLOYER_PRIVATE_KEY");
-    const sentinelAccount = getServerAccount(context.env, "SENTINEL_PRIVATE_KEY");
-    const activeUser: Address = queryUser ? (queryUser as Address) : demoAccount.address;
+
+    // P1 Read-Only Mode Support: NEVER require private keys to inspect on-chain vault state!
+    const configuredDemoAddr = getOptionalServerAddress(context.env, "DEPLOYER_PRIVATE_KEY");
+    const configuredSentinelAddr = getOptionalServerAddress(context.env, "SENTINEL_PRIVATE_KEY");
+
+    const [onChainAdmin, onChainSentinel] = await Promise.all([
+      configuredDemoAddr
+        ? Promise.resolve(configuredDemoAddr)
+        : publicClient.readContract({
+            address: vaultAddress,
+            abi: ZERO_DRAIN_VAULT_ABI,
+            functionName: "admin",
+          }),
+      configuredSentinelAddr
+        ? Promise.resolve(configuredSentinelAddr)
+        : publicClient.readContract({
+            address: vaultAddress,
+            abi: ZERO_DRAIN_VAULT_ABI,
+            functionName: "sentinel",
+          }),
+    ]);
+
+    const demoAddress: Address = configuredDemoAddr ?? onChainAdmin;
+    const sentinelAddress: Address = configuredSentinelAddr ?? onChainSentinel;
+    const activeUser: Address = queryUser ? (queryUser as Address) : demoAddress;
 
     const [
       blockNumber,
@@ -87,9 +110,10 @@ export async function onRequestGet(context: PagesContext) {
       ok: true,
       chainId: 10143,
       publicDemoMode: context.env.PUBLIC_DEMO_MODE === "true",
+      readOnlyMode: !Boolean(configuredDemoAddr && configuredSentinelAddr),
       vaultAddress,
-      demoAddress: demoAccount.address,
-      sentinelAddress: sentinelAccount.address,
+      demoAddress,
+      sentinelAddress,
       activeUser,
       blockNumber: blockNumber.toString(),
       gasPriceGwei: (Number(gasPrice) / 1e9).toFixed(1),
