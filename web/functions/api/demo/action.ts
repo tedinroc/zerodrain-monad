@@ -144,25 +144,36 @@ export async function onRequestPost(context: PagesContext) {
           args: [qx, qy],
         });
       } catch (simErr) {
-        let errorName = "PasskeyLockedDuringBreaker";
         if (simErr instanceof BaseError) {
           const revertErr = simErr.walk((e) => e instanceof ContractFunctionRevertedError);
-          if (revertErr instanceof ContractFunctionRevertedError && revertErr.data?.errorName) {
-            errorName = revertErr.data.errorName;
+          if (revertErr instanceof ContractFunctionRevertedError) {
+            const errorName = revertErr.data?.errorName || "ContractReverted";
+            if (errorName === "PasskeyLockedDuringBreaker") {
+              return jsonResponse(
+                {
+                  ok: false,
+                  lockedDuringIncident: true,
+                  errorName,
+                  error: "Passkey mutation is frozen on-chain while vault is in PASSKEY_ONLY mode.",
+                },
+                409
+              );
+            }
+            if (errorName === "InvalidPublicKey") {
+              return jsonResponse(
+                {
+                  ok: false,
+                  lockedDuringIncident: false,
+                  errorName,
+                  error: "Provided P-256 public key is not on curve secp256r1.",
+                },
+                400
+              );
+            }
           }
         }
-        return jsonResponse(
-          {
-            ok: false,
-            lockedDuringIncident: errorName === "PasskeyLockedDuringBreaker",
-            errorName,
-            error:
-              errorName === "InvalidPublicKey"
-                ? "Provided P-256 public key is not on curve secp256r1."
-                : "Passkey mutation is frozen on-chain while vault is in PASSKEY_ONLY mode.",
-          },
-          errorName === "InvalidPublicKey" ? 400 : 409
-        );
+        // Non-revert RPC hiccup: log/rethrow instead of falsely reporting PasskeyLockedDuringBreaker
+        throw simErr;
       }
 
       const data = encodeFunctionData({
@@ -199,22 +210,21 @@ export async function onRequestPost(context: PagesContext) {
           args: [recipient, amount],
         });
       } catch (simErr) {
-        let errorName = "TransactionReverted";
-        let details = simErr instanceof Error ? simErr.message : "Reverted";
         if (simErr instanceof BaseError) {
           const revertErr = simErr.walk((e) => e instanceof ContractFunctionRevertedError);
           if (revertErr instanceof ContractFunctionRevertedError) {
-            errorName = revertErr.data?.errorName || "VaultInPasskeyOnlyMode";
-            details = `${errorName}(${(revertErr.data?.args || []).map(String).join(", ")})`;
+            const errorName = revertErr.data?.errorName || "VaultInPasskeyOnlyMode";
+            const details = `${errorName}(${(revertErr.data?.args || []).map(String).join(", ")})`;
+            return jsonResponse({
+              ok: false,
+              blockedOnChain: true,
+              errorName,
+              error: details,
+              attemptedRecipient: recipient,
+            });
           }
         }
-        return jsonResponse({
-          ok: false,
-          blockedOnChain: true,
-          errorName,
-          error: details,
-          attemptedRecipient: recipient,
-        });
+        throw simErr;
       }
 
       if (body.hijacked) {
