@@ -1,15 +1,20 @@
-import { NextResponse } from "next/server";
 import { encodeFunctionData } from "viem";
-import { ZERO_DRAIN_VAULT_ABI } from "@/lib/abi";
-import { CLEAN_MANIFEST_SOURCE, computeSha256Hex } from "@/lib/manifest";
-import { getServerAccount, sendSignedTxSync, VAULT_ADDRESS } from "@/lib/monad";
+import {
+  CLEAN_MANIFEST_SOURCE,
+  getServerAccount,
+  getVaultAddress,
+  jsonResponse,
+  sendSignedTxSync,
+  sha256Hex,
+  ZERO_DRAIN_VAULT_ABI,
+  type PagesContext,
+} from "../../_lib/server";
 
-export const dynamic = "force-dynamic";
-
-export async function POST() {
+export async function onRequestPost(context: PagesContext) {
   try {
-    const adminAccount = getServerAccount("DEPLOYER_PRIVATE_KEY");
-    const cleanHash = computeSha256Hex(CLEAN_MANIFEST_SOURCE);
+    const vaultAddress = getVaultAddress(context.env);
+    const adminAccount = getServerAccount(context.env, "DEPLOYER_PRIVATE_KEY");
+    const cleanHash = await sha256Hex(CLEAN_MANIFEST_SOURCE);
 
     const data = encodeFunctionData({
       abi: ZERO_DRAIN_VAULT_ABI,
@@ -19,11 +24,11 @@ export async function POST() {
 
     const sent = await sendSignedTxSync({
       account: adminAccount,
-      to: VAULT_ADDRESS,
+      to: vaultAddress,
       data,
     });
 
-    return NextResponse.json({
+    return jsonResponse({
       ok: true,
       txHash: sent.hash,
       blockNumber: sent.blockNumber.toString(),
@@ -32,9 +37,9 @@ export async function POST() {
       trustedHash: cleanHash,
     });
   } catch (err) {
-    return NextResponse.json(
+    return jsonResponse(
       { ok: false, error: err instanceof Error ? err.message : "Failed to reset vault mode" },
-      { status: 500 }
+      500
     );
   }
 }

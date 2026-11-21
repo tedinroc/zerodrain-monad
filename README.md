@@ -19,9 +19,10 @@ ZeroDrain 在合約層建立兩道防線，且**熔斷不凍結用戶資金（�
 - **商業模型**：B2B DeFi 安全護盾訂閱（依 TVL 分級）+ 去中心化白帽哨兵報警激勵 + 鏈上保險保費折價合作。
 
 ## 鏈上可驗證證據（Monad Testnet `10143`）
+- **公網實機戰情室（HTTPS，支援 TouchID / FaceID）**：[`https://zerodrain-monad.pages.dev`](https://zerodrain-monad.pages.dev)
 - **已驗證合約 `ZeroDrainVault`**：[`0xbE9e6B77e05a0f345C06d77B1D841f8835B86Af4`](https://testnet.monadvision.com/address/0xbe9e6b77e05a0f345c06d77b1d841f8835b86af4)（[Monadscan](https://testnet.monadscan.com/address/0xbe9e6b77e05a0f345c06d77b1d841f8835b86af4)）
 - **部署交易**：`0x764908a23a8c121423cb0b2fffc598bf13ad0c91039ca665e5712f1d65bcb0a1`
-- **架構目錄**：`contracts/`（Foundry + OpenZeppelin `WebAuthn`/`P256`，8/8 Monad Testnet Fork 測試通過）、`web/`（Next.js 15 + Viem + `ox` WebAuthnP256）
+- **架構目錄**：`contracts/`（Foundry + OpenZeppelin `WebAuthn`/`P256`，8/8 Monad Testnet Fork 測試通過）、`web/`（Next.js 15 靜態匯出 + Cloudflare Pages Functions + Viem + `ox` WebAuthnP256）
 
 ## 30 秒體驗流程
 1. 點擊「存入 0.10 MON」與「綁定 TouchID / FaceID」（無需插件即可用極速演練模式，亦支援 MetaMask）。

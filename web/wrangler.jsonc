@@ -1,0 +1,10 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "zerodrain-monad",
+  "pages_build_output_dir": "out",
+  "compatibility_date": "2026-05-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "vars": {
+    "NEXT_PUBLIC_VAULT_ADDRESS": "0xbE9e6B77e05a0f345C06d77B1D841f8835B86Af4"
+  }
+}

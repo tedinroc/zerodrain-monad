@@ -1,20 +1,20 @@
-import { NextRequest, NextResponse } from "next/server";
 import { encodeFunctionData, formatEther, isAddress, parseEther, type Address } from "viem";
-import { ZERO_DRAIN_VAULT_ABI } from "@/lib/abi";
-import { buildManifestPayload, DRAINER_ADDRESS } from "@/lib/manifest";
 import {
+  buildManifestPayload,
+  DRAINER_ADDRESS,
+  getPublicClient,
   getServerAccount,
-  publicClient,
+  getVaultAddress,
+  jsonResponse,
   sendSignedTxSync,
   traceCallOnMonad,
-  VAULT_ADDRESS,
-} from "@/lib/monad";
+  ZERO_DRAIN_VAULT_ABI,
+  type PagesContext,
+} from "../../_lib/server";
 
-export const dynamic = "force-dynamic";
-
-export async function POST(req: NextRequest) {
+export async function onRequestPost(context: PagesContext) {
   try {
-    const body = (await req.json()) as {
+    const body = (await context.request.json()) as {
       hijacked?: boolean;
       userAddress?: string;
       amountMon?: string;
@@ -23,25 +23,26 @@ export async function POST(req: NextRequest) {
 
     const hijacked = Boolean(body.hijacked);
     const autoTrip = body.autoTrip !== false;
-    const demoAccount = getServerAccount("DEPLOYER_PRIVATE_KEY");
-    const sentinelAccount = getServerAccount("SENTINEL_PRIVATE_KEY");
+    const vaultAddress = getVaultAddress(context.env);
+    const publicClient = getPublicClient();
+    const demoAccount = getServerAccount(context.env, "DEPLOYER_PRIVATE_KEY");
+    const sentinelAccount = getServerAccount(context.env, "SENTINEL_PRIVATE_KEY");
     const userAddress: Address =
       body.userAddress && isAddress(body.userAddress)
         ? (body.userAddress as Address)
         : demoAccount.address;
 
     const amountWei = parseEther(body.amountMon || "0.05");
-    const manifest = buildManifestPayload(hijacked);
+    const manifest = await buildManifestPayload(hijacked);
 
-    // 1. Read canonical trusted hash & mode from Monad Testnet
     const [trustedHash, currentMode] = await Promise.all([
       publicClient.readContract({
-        address: VAULT_ADDRESS,
+        address: vaultAddress,
         abi: ZERO_DRAIN_VAULT_ABI,
         functionName: "trustedFrontendHash",
       }),
       publicClient.readContract({
-        address: VAULT_ADDRESS,
+        address: vaultAddress,
         abi: ZERO_DRAIN_VAULT_ABI,
         functionName: "mode",
       }),
@@ -51,7 +52,6 @@ export async function POST(req: NextRequest) {
     const simulatedRecipient: Address = hijacked ? DRAINER_ADDRESS : userAddress;
     const recipientMismatch = simulatedRecipient.toLowerCase() !== userAddress.toLowerCase();
 
-    // 2. Encode the exact withdraw(recipient, amount) calldata the UI would submit & trace via Monad RPC
     const calldata = encodeFunctionData({
       abi: ZERO_DRAIN_VAULT_ABI,
       functionName: "withdraw",
@@ -60,7 +60,7 @@ export async function POST(req: NextRequest) {
 
     const trace = await traceCallOnMonad({
       from: userAddress,
-      to: VAULT_ADDRESS,
+      to: vaultAddress,
       data: calldata,
     });
 
@@ -74,7 +74,6 @@ export async function POST(req: NextRequest) {
       alreadyTripped?: boolean;
     } | null = null;
 
-    // 3. If threat detected & vault still NORMAL, fire sub-second tripBreaker() on Monad Testnet!
     if (threatDetected && autoTrip) {
       if (currentMode === 1) {
         tripResult = {
@@ -96,7 +95,7 @@ export async function POST(req: NextRequest) {
         });
         const sent = await sendSignedTxSync({
           account: sentinelAccount,
-          to: VAULT_ADDRESS,
+          to: vaultAddress,
           data: tripData,
         });
         tripResult = {
@@ -109,7 +108,7 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    return NextResponse.json({
+    return jsonResponse({
       ok: true,
       threatDetected,
       sriCheck: {
@@ -132,9 +131,9 @@ export async function POST(req: NextRequest) {
       breakerTx: tripResult,
     });
   } catch (err) {
-    return NextResponse.json(
+    return jsonResponse(
       { ok: false, error: err instanceof Error ? err.message : "Sentinel inspection failed" },
-      { status: 500 }
+      500
     );
   }
 }

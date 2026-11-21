@@ -1,4 +1,3 @@
-import { NextRequest, NextResponse } from "next/server";
 import {
   BaseError,
   ContractFunctionRevertedError,
@@ -6,11 +5,16 @@ import {
   parseEther,
   type Hex,
 } from "viem";
-import { ZERO_DRAIN_VAULT_ABI } from "@/lib/abi";
-import { DRAINER_ADDRESS } from "@/lib/manifest";
-import { getServerAccount, publicClient, sendSignedTxSync, VAULT_ADDRESS } from "@/lib/monad";
-
-export const dynamic = "force-dynamic";
+import {
+  DRAINER_ADDRESS,
+  getPublicClient,
+  getServerAccount,
+  getVaultAddress,
+  jsonResponse,
+  sendSignedTxSync,
+  ZERO_DRAIN_VAULT_ABI,
+  type PagesContext,
+} from "../../_lib/server";
 
 type DemoActionBody =
   | { action: "deposit"; amountMon?: string }
@@ -43,10 +47,12 @@ function capDemoAmount(amountMon?: string): bigint {
   return parsed > maxAllowed ? maxAllowed : parsed;
 }
 
-export async function POST(req: NextRequest) {
+export async function onRequestPost(context: PagesContext) {
   try {
-    const body = (await req.json()) as DemoActionBody;
-    const demoAccount = getServerAccount("DEPLOYER_PRIVATE_KEY");
+    const body = (await context.request.json()) as DemoActionBody;
+    const vaultAddress = getVaultAddress(context.env);
+    const publicClient = getPublicClient();
+    const demoAccount = getServerAccount(context.env, "DEPLOYER_PRIVATE_KEY");
 
     if (body.action === "deposit") {
       const amount = capDemoAmount(body.amountMon || "0.1");
@@ -56,11 +62,11 @@ export async function POST(req: NextRequest) {
       });
       const sent = await sendSignedTxSync({
         account: demoAccount,
-        to: VAULT_ADDRESS,
+        to: vaultAddress,
         data,
         value: amount,
       });
-      return NextResponse.json({
+      return jsonResponse({
         ok: true,
         action: "deposit",
         txHash: sent.hash,
@@ -79,10 +85,10 @@ export async function POST(req: NextRequest) {
       });
       const sent = await sendSignedTxSync({
         account: demoAccount,
-        to: VAULT_ADDRESS,
+        to: vaultAddress,
         data,
       });
-      return NextResponse.json({
+      return jsonResponse({
         ok: true,
         action: "registerPasskey",
         txHash: sent.hash,
@@ -95,8 +101,6 @@ export async function POST(req: NextRequest) {
 
     if (body.action === "withdraw") {
       const amount = capDemoAmount(body.amountMon || "0.05");
-      // Demo safety: in hijacked mode we test the on-chain breaker ONLY when PASSKEY_ONLY is tripped,
-      // or simulate/block sending real MON to DRAINER_ADDRESS if someone clicks before tripping.
       const recipient = body.hijacked ? DRAINER_ADDRESS : demoAccount.address;
       const data = encodeFunctionData({
         abi: ZERO_DRAIN_VAULT_ABI,
@@ -104,11 +108,10 @@ export async function POST(req: NextRequest) {
         args: [recipient, amount],
       });
 
-      // Pre-simulate to catch exact custom error (VaultInPasskeyOnlyMode) cleanly
       try {
         await publicClient.simulateContract({
           account: demoAccount.address,
-          address: VAULT_ADDRESS,
+          address: vaultAddress,
           abi: ZERO_DRAIN_VAULT_ABI,
           functionName: "withdraw",
           args: [recipient, amount],
@@ -123,7 +126,7 @@ export async function POST(req: NextRequest) {
             details = `${errorName}(${(revertErr.data?.args || []).map(String).join(", ")})`;
           }
         }
-        return NextResponse.json({
+        return jsonResponse({
           ok: false,
           blockedOnChain: true,
           errorName,
@@ -132,8 +135,6 @@ export async function POST(req: NextRequest) {
         });
       }
 
-      // If vault was NOT tripped yet and hijacked=true, execute a tiny 0.001 MON demonstration transfer
-      // so the judge literally sees funds stolen when ZeroDrain is NOT armed!
       const effectiveAmount = body.hijacked ? parseEther("0.001") : amount;
       const effectiveData = body.hijacked
         ? encodeFunctionData({
@@ -145,11 +146,11 @@ export async function POST(req: NextRequest) {
 
       const sent = await sendSignedTxSync({
         account: demoAccount,
-        to: VAULT_ADDRESS,
+        to: vaultAddress,
         data: effectiveData,
       });
 
-      return NextResponse.json({
+      return jsonResponse({
         ok: true,
         action: "withdraw",
         hijackedExecuted: Boolean(body.hijacked),
@@ -184,10 +185,10 @@ export async function POST(req: NextRequest) {
 
       const sent = await sendSignedTxSync({
         account: demoAccount,
-        to: VAULT_ADDRESS,
+        to: vaultAddress,
         data,
       });
-      return NextResponse.json({
+      return jsonResponse({
         ok: true,
         action: "emergencyWithdrawWebAuthn",
         method: "WEBAUTHN_EIP7951_0x0100",
@@ -209,10 +210,10 @@ export async function POST(req: NextRequest) {
 
       const sent = await sendSignedTxSync({
         account: demoAccount,
-        to: VAULT_ADDRESS,
+        to: vaultAddress,
         data,
       });
-      return NextResponse.json({
+      return jsonResponse({
         ok: true,
         action: "emergencyWithdrawRawP256",
         method: "RAW_P256_EIP7951_0x0100",
@@ -224,11 +225,11 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    return NextResponse.json({ ok: false, error: "Unsupported action" }, { status: 400 });
+    return jsonResponse({ ok: false, error: "Unsupported action" }, 400);
   } catch (err) {
-    return NextResponse.json(
+    return jsonResponse(
       { ok: false, error: err instanceof Error ? err.message : "Demo action failed" },
-      { status: 500 }
+      500
     );
   }
 }

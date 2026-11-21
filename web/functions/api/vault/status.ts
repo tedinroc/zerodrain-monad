@@ -1,15 +1,21 @@
-import { NextRequest, NextResponse } from "next/server";
 import { formatEther, isAddress, type Address } from "viem";
-import { ZERO_DRAIN_VAULT_ABI } from "@/lib/abi";
-import { getServerAccount, publicClient, VAULT_ADDRESS } from "@/lib/monad";
+import {
+  getPublicClient,
+  getServerAccount,
+  getVaultAddress,
+  jsonResponse,
+  ZERO_DRAIN_VAULT_ABI,
+  type PagesContext,
+} from "../../_lib/server";
 
-export const dynamic = "force-dynamic";
-
-export async function GET(req: NextRequest) {
+export async function onRequestGet(context: PagesContext) {
   try {
-    const queryUser = req.nextUrl.searchParams.get("user");
-    const demoAccount = getServerAccount("DEPLOYER_PRIVATE_KEY");
-    const sentinelAccount = getServerAccount("SENTINEL_PRIVATE_KEY");
+    const url = new URL(context.request.url);
+    const queryUser = url.searchParams.get("user");
+    const vaultAddress = getVaultAddress(context.env);
+    const publicClient = getPublicClient();
+    const demoAccount = getServerAccount(context.env, "DEPLOYER_PRIVATE_KEY");
+    const sentinelAccount = getServerAccount(context.env, "SENTINEL_PRIVATE_KEY");
     const activeUser: Address =
       queryUser && isAddress(queryUser) ? (queryUser as Address) : demoAccount.address;
 
@@ -26,30 +32,30 @@ export async function GET(req: NextRequest) {
       publicClient.getBlockNumber(),
       publicClient.getGasPrice(),
       publicClient.readContract({
-        address: VAULT_ADDRESS,
+        address: vaultAddress,
         abi: ZERO_DRAIN_VAULT_ABI,
         functionName: "isNativeP256PrecompileActive",
       }),
       publicClient.readContract({
-        address: VAULT_ADDRESS,
+        address: vaultAddress,
         abi: ZERO_DRAIN_VAULT_ABI,
         functionName: "getVaultStatus",
       }),
       publicClient.readContract({
-        address: VAULT_ADDRESS,
+        address: vaultAddress,
         abi: ZERO_DRAIN_VAULT_ABI,
         functionName: "balances",
         args: [activeUser],
       }),
       publicClient.getBalance({ address: activeUser }),
       publicClient.readContract({
-        address: VAULT_ADDRESS,
+        address: vaultAddress,
         abi: ZERO_DRAIN_VAULT_ABI,
         functionName: "passkeys",
         args: [activeUser],
       }),
       publicClient.readContract({
-        address: VAULT_ADDRESS,
+        address: vaultAddress,
         abi: ZERO_DRAIN_VAULT_ABI,
         functionName: "nonces",
         args: [activeUser],
@@ -68,10 +74,10 @@ export async function GET(req: NextRequest) {
       tvl,
     ] = vaultStatus;
 
-    return NextResponse.json({
+    return jsonResponse({
       ok: true,
       chainId: 10143,
-      vaultAddress: VAULT_ADDRESS,
+      vaultAddress,
       demoAddress: demoAccount.address,
       sentinelAddress: sentinelAccount.address,
       activeUser,
@@ -99,9 +105,9 @@ export async function GET(req: NextRequest) {
       },
     });
   } catch (err) {
-    return NextResponse.json(
+    return jsonResponse(
       { ok: false, error: err instanceof Error ? err.message : "Failed to fetch vault status" },
-      { status: 500 }
+      500
     );
   }
 }

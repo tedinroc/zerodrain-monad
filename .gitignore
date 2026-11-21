@@ -13,6 +13,7 @@ contracts/broadcast/
 # Next.js / Node
 node_modules/
 web/.next/
+web/.open-next/
 web/out/
 web/.vercel/
 web/.wrangler/

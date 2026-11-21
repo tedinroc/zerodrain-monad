@@ -1,40 +1,46 @@
-import { NextRequest, NextResponse } from "next/server";
 import { isAddress, parseEther, type Address } from "viem";
-import { ZERO_DRAIN_VAULT_ABI } from "@/lib/abi";
-import { getServerAccount, publicClient, VAULT_ADDRESS } from "@/lib/monad";
+import {
+  getPublicClient,
+  getServerAccount,
+  getVaultAddress,
+  jsonResponse,
+  ZERO_DRAIN_VAULT_ABI,
+  type PagesContext,
+} from "../../_lib/server";
 
-export const dynamic = "force-dynamic";
-
-export async function GET(req: NextRequest) {
+export async function onRequestGet(context: PagesContext) {
   try {
-    const queryUser = req.nextUrl.searchParams.get("user");
-    const querySafe = req.nextUrl.searchParams.get("safeRecipient");
-    const amountMon = req.nextUrl.searchParams.get("amountMon") || "0.05";
+    const url = new URL(context.request.url);
+    const queryUser = url.searchParams.get("user");
+    const querySafe = url.searchParams.get("safeRecipient");
+    const amountMon = url.searchParams.get("amountMon") || "0.05";
 
-    const demoAccount = getServerAccount("DEPLOYER_PRIVATE_KEY");
+    const vaultAddress = getVaultAddress(context.env);
+    const publicClient = getPublicClient();
+    const demoAccount = getServerAccount(context.env, "DEPLOYER_PRIVATE_KEY");
     const user: Address =
       queryUser && isAddress(queryUser) ? (queryUser as Address) : demoAccount.address;
     const safeRecipient: Address =
       querySafe && isAddress(querySafe) ? (querySafe as Address) : user;
 
     const amount = parseEther(amountMon);
-    const deadline = BigInt(Math.floor(Date.now() / 1000) + 600); // 10 minutes
+    const deadline = BigInt(Math.floor(Date.now() / 1000) + 600);
 
     const nonce = await publicClient.readContract({
-      address: VAULT_ADDRESS,
+      address: vaultAddress,
       abi: ZERO_DRAIN_VAULT_ABI,
       functionName: "nonces",
       args: [user],
     });
 
     const challenge = await publicClient.readContract({
-      address: VAULT_ADDRESS,
+      address: vaultAddress,
       abi: ZERO_DRAIN_VAULT_ABI,
       functionName: "computeRecoveryChallenge",
       args: [user, safeRecipient, amount, nonce, deadline],
     });
 
-    return NextResponse.json({
+    return jsonResponse({
       ok: true,
       user,
       safeRecipient,
@@ -45,9 +51,9 @@ export async function GET(req: NextRequest) {
       challenge,
     });
   } catch (err) {
-    return NextResponse.json(
+    return jsonResponse(
       { ok: false, error: err instanceof Error ? err.message : "Failed to compute challenge" },
-      { status: 500 }
+      500
     );
   }
 }

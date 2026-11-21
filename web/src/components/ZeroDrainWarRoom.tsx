@@ -1014,8 +1014,8 @@ export default function ZeroDrainWarRoom() {
                     <span className="text-zinc-400">尚未綁定</span>
                   )}
                 </div>
-                <div className="mt-1 font-mono text-[11px] text-zinc-400">
-                  防重放 Nonce: #{status?.user.nonce ?? "0"} · 協議 TVL: {status ? Number(status.tvlMon).toFixed(2) : "--"} MON
+                <div className="mt-1 font-mono text-[11px] text-zinc-400 whitespace-nowrap">
+                  Nonce #{status?.user.nonce ?? "0"} · TVL {status ? Number(status.tvlMon).toFixed(2) : "--"} MON
                 </div>
               </div>
             </div>
@@ -1089,15 +1089,15 @@ export default function ZeroDrainWarRoom() {
               <div className="flex items-center gap-2">
                 <Lock className={`h-5 w-5 ${isTripped ? "text-emerald-400" : "text-violet-400"}`} />
                 <h3 className="text-base font-bold text-white">
-                  硬體逃生艙（EIP-7951 `0x0100` 鏈上驗簽）
+                  硬體逃生艙（EIP-7951 0x0100 鏈上驗簽）
                 </h3>
               </div>
               <button
                 onClick={() => setPasskeyMode((m) => (m === "webauthn" ? "webcrypto" : "webauthn"))}
-                className="rounded-lg border border-white/15 bg-black/40 px-2 py-1 text-[11px] font-medium text-zinc-300 hover:text-white cursor-pointer"
+                className="shrink-0 whitespace-nowrap rounded-lg border border-white/15 bg-black/40 px-2.5 py-1 text-[11px] font-medium text-zinc-300 hover:text-white cursor-pointer"
                 title="若無生物辨識設備可切換為 WebCrypto 本地 P-256，同樣由 Monad 0x0100 原生預編譯驗證"
               >
-                {passkeyMode === "webauthn" ? "模式: TouchID/FaceID" : "模式: WebCrypto P-256 備援"}
+                {passkeyMode === "webauthn" ? "TouchID / FaceID" : "WebCrypto P-256 備援"}
               </button>
             </div>
 
