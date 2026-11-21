@@ -62,6 +62,7 @@ interface VaultStatusResponse {
   tvlMon: string;
   user: {
     address: Address;
+    lockedRecoveryAddress?: Address;
     vaultBalanceWei: string;
     vaultBalanceMon: string;
     walletBalanceMon: string;
@@ -655,12 +656,12 @@ export default function ZeroDrainWarRoom() {
               {isTripped ? <ShieldAlert className="h-5 w-5" /> : <ShieldCheck className="h-5 w-5" />}
             </div>
             <div className="min-w-0">
-              <div className="flex items-center gap-2">
-                <span className="truncate text-base font-bold tracking-tight text-white sm:text-lg">
+              <div className="flex flex-col items-start gap-0.5 sm:flex-row sm:items-center sm:gap-2">
+                <span className="truncate text-sm font-bold tracking-tight text-white sm:text-lg">
                   {t.brandName}
                 </span>
                 <span
-                  className={`inline-flex shrink-0 items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] font-bold ${
+                  className={`inline-flex shrink-0 items-center gap-1.5 rounded-full px-2 py-0.5 text-[10px] font-bold sm:text-[11px] ${
                     isTripped
                       ? "bg-red-500/20 text-red-300 border border-red-500/40"
                       : "bg-emerald-500/15 text-emerald-300 border border-emerald-500/30"
@@ -711,7 +712,7 @@ export default function ZeroDrainWarRoom() {
             <a
               href={`${EXPLORER_URL}/address/${VAULT_ADDRESS}`}
               target="_blank"
-              rel="noreferrer"
+              rel="noopener noreferrer"
               title={t.explorerBtn}
               className="inline-flex items-center gap-1 rounded-lg border border-violet-400/30 bg-violet-500/15 px-2.5 py-1.5 text-xs font-semibold text-violet-200 hover:bg-violet-500/25"
             >
@@ -969,7 +970,9 @@ export default function ZeroDrainWarRoom() {
                           <Lock className="h-3.5 w-3.5 text-emerald-400" />
                           {t.safeRecipientLocked}
                         </span>
-                        <span className="font-bold text-emerald-300">{shortAddr(activeUserAddress || "")}</span>
+                        <span className="font-bold text-emerald-300">
+                          {shortAddr(status?.user.lockedRecoveryAddress || activeUserAddress || "")}
+                        </span>
                       </div>
                       <button
                         onClick={handleHardwareEscape}
@@ -1006,7 +1009,7 @@ export default function ZeroDrainWarRoom() {
                     <a
                       href={`${EXPLORER_URL}/tx/${recoveryProof.txHash}`}
                       target="_blank"
-                      rel="noreferrer"
+                      rel="noopener noreferrer"
                       className="inline-flex items-center gap-1 rounded-lg border border-white/15 bg-white/5 px-2.5 py-1 text-zinc-200 hover:bg-white/10"
                     >
                       {t.viewTx} {shortHash(recoveryProof.txHash)}
@@ -1189,7 +1192,7 @@ export default function ZeroDrainWarRoom() {
                           <a
                             href={`${EXPLORER_URL}/tx/${item.txHash}`}
                             target="_blank"
-                            rel="noreferrer"
+                            rel="noopener noreferrer"
                             className="inline-flex items-center gap-0.5 text-zinc-400 hover:text-white"
                           >
                             <ExternalLink className="h-3 w-3" />
@@ -1232,7 +1235,7 @@ export default function ZeroDrainWarRoom() {
                 <a
                   href={`${EXPLORER_URL}/address/${VAULT_ADDRESS}`}
                   target="_blank"
-                  rel="noreferrer"
+                  rel="noopener noreferrer"
                   className="mt-2 inline-flex items-center gap-1 font-mono text-[11px] text-violet-300 underline"
                 >
                   {shortAddr(VAULT_ADDRESS)} <ExternalLink className="h-3 w-3" />

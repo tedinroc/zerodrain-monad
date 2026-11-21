@@ -368,9 +368,9 @@ async function broadcastOnceSync(params: {
           jsonrpc: "2.0",
           id: 1,
           method: "eth_sendRawTransactionSync",
-          params: [serialized, 4000],
+          params: [serialized, 2500],
         }),
-        signal: AbortSignal.timeout(6000),
+        signal: AbortSignal.timeout(3200),
       });
       const json = (await rpcRes.json()) as {
         result?: {
