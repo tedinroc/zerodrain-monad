@@ -69,8 +69,9 @@ const RATE_LIMIT_WINDOW_MS = 60_000;
 const RATE_LIMIT_MAX_WRITES = 45;
 const rateBuckets = new Map<string, number[]>();
 
-// Per-signer serialization queue within the isolate to eliminate concurrent nonce collisions
+// Per-signer serialization queue & monotonic nonce high-water mark within the isolate
 const signerQueues = new Map<string, Promise<unknown>>();
+const signerHighWaterNonce = new Map<string, number>();
 
 function withSignerLock<T>(address: string, fn: () => Promise<T>): Promise<T> {
   const key = address.toLowerCase();
@@ -281,8 +282,12 @@ function isNonceCollisionError(err: unknown): boolean {
   const msg = (err instanceof Error ? err.message : String(err)).toLowerCase();
   return (
     msg.includes("nonce too low") ||
+    msg.includes("nonce is too low") ||
+    msg.includes("invalid nonce") ||
     msg.includes("replacement transaction underpriced") ||
-    msg.includes("nonce has already been used")
+    msg.includes("nonce has already been used") ||
+    msg.includes("already known") ||
+    msg.includes("already imported")
   );
 }
 
@@ -296,13 +301,14 @@ async function broadcastOnceSync(params: {
   to: Address;
   data: Hex;
   value?: bigint;
-  nonceBump?: number;
+  minNonce?: number;
 }): Promise<{
   hash: Hex;
   blockNumber: bigint;
   gasUsed: bigint;
   latencyMs: number;
   usedSyncRpc: boolean;
+  usedNonce: number;
 }> {
   const publicClient = getPublicClient();
   const walletClient = createWalletClient({
@@ -325,7 +331,14 @@ async function broadcastOnceSync(params: {
     }),
   ]);
 
-  const nonce = pendingNonce + (params.nonceBump ?? 0);
+  const signerKey = params.account.address.toLowerCase();
+  const prevHighWater = signerHighWaterNonce.get(signerKey);
+  const floorNonce = Math.max(
+    pendingNonce,
+    prevHighWater !== undefined ? prevHighWater + 1 : 0,
+    params.minNonce ?? 0
+  );
+  const nonce = floorNonce;
   const gasLimit = estimatedGas + estimatedGas / 10n + 2_000n;
   const minGasPrice = 110_000_000_000n;
   const maxFeePerGas = gasPrice > minGasPrice ? gasPrice + 10_000_000_000n : minGasPrice;
@@ -372,16 +385,20 @@ async function broadcastOnceSync(params: {
         if (json.result.status === "0x0") {
           throw new Error("Transaction reverted on-chain");
         }
+        signerHighWaterNonce.set(signerKey, Math.max(prevHighWater ?? -1, nonce));
         return {
           hash: json.result.transactionHash,
           blockNumber: BigInt(json.result.blockNumber || "0x0"),
           gasUsed: BigInt(json.result.gasUsed || "0x0"),
           latencyMs: Date.now() - tBroadcast,
           usedSyncRpc: true,
+          usedNonce: nonce,
         };
       }
       if (json.error?.message && isNonceCollisionError(new Error(json.error.message))) {
-        throw new Error(json.error.message);
+        const err = new Error(json.error.message) as Error & { attemptedNonce?: number };
+        err.attemptedNonce = nonce;
+        throw err;
       }
     } catch (err) {
       if (err instanceof Error && (err.message.includes("reverted") || isNonceCollisionError(err))) {
@@ -394,10 +411,12 @@ async function broadcastOnceSync(params: {
   try {
     hash = await publicClient.sendRawTransaction({ serializedTransaction: serialized });
   } catch (err) {
-    // If eth_sendRawTransactionSync actually submitted the tx on RPC #1 and only timed out returning receipt,
-    // RPC #2 / fallback returns "already known"; wait on the deterministic tx hash instead of failing.
     if (!isAlreadyKnownError(err)) {
-      throw err;
+      const wrapped = (err instanceof Error ? err : new Error(String(err))) as Error & {
+        attemptedNonce?: number;
+      };
+      wrapped.attemptedNonce = nonce;
+      throw wrapped;
     }
   }
 
@@ -409,12 +428,14 @@ async function broadcastOnceSync(params: {
   if (receipt.status === "reverted") {
     throw new Error("Transaction reverted on-chain");
   }
+  signerHighWaterNonce.set(signerKey, Math.max(prevHighWater ?? -1, nonce));
   return {
     hash,
     blockNumber: receipt.blockNumber,
     gasUsed: receipt.gasUsed,
     latencyMs: Date.now() - tBroadcast,
     usedSyncRpc: false,
+    usedNonce: nonce,
   };
 }
 
@@ -431,15 +452,23 @@ export async function sendSignedTxSync(params: {
   usedSyncRpc: boolean;
 }> {
   return withSignerLock(params.account.address, async () => {
-    try {
-      return await broadcastOnceSync(params);
-    } catch (err) {
-      if (isNonceCollisionError(err)) {
-        // Cross-isolate nonce collision retry with fresh pending nonce
-        return await broadcastOnceSync(params);
+    let minNonce: number | undefined;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        return await broadcastOnceSync({ ...params, minNonce });
+      } catch (err) {
+        if (attempt < 2 && isNonceCollisionError(err)) {
+          const attempted = (err as { attemptedNonce?: number })?.attemptedNonce;
+          if (typeof attempted === "number") {
+            minNonce = attempted + 1;
+          }
+          await new Promise((r) => setTimeout(r, 350));
+          continue;
+        }
+        throw err;
       }
-      throw err;
     }
+    throw new Error("Transaction broadcast exhausted nonce retries");
   });
 }
 
