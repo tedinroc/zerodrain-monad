@@ -1,0 +1,20 @@
+# Secrets & local env
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Foundry
+contracts/cache/
+contracts/out/
+contracts/broadcast/
+
+# Next.js / Node
+node_modules/
+web/.next/
+web/out/
+web/.vercel/
+web/.wrangler/
+.DS_Store
+*.log
