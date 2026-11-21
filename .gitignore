@@ -19,5 +19,6 @@ web/out/
 web/.vercel/
 web/.wrangler/
 web/next-env.d.ts
+*.tsbuildinfo
 .DS_Store
 *.log
