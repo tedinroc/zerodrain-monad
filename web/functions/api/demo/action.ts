@@ -41,10 +41,25 @@ type DemoActionBody =
       s: Hex;
     };
 
-function capDemoAmount(amountMon?: string): bigint {
-  const parsed = parseEther(amountMon || "0.05");
+const BYTES32_RE = /^0x[0-9a-fA-F]{64}$/;
+const MAX_DEMO_VAULT_BALANCE = parseEther("0.5");
+
+function parseSafeDemoAmount(amountMon?: string, defaultVal = "0.05"): bigint {
+  const raw = (amountMon || defaultVal).trim();
+  if (!/^\d+(\.\d{1,6})?$/.test(raw)) {
+    throw new Error("Invalid MON amount format");
+  }
+  const parsed = parseEther(raw);
+  if (parsed <= 0n) throw new Error("Amount must be positive");
   const maxAllowed = parseEther("0.2");
   return parsed > maxAllowed ? maxAllowed : parsed;
+}
+
+function assertBytes32(val: unknown, name: string): Hex {
+  if (typeof val !== "string" || !BYTES32_RE.test(val)) {
+    throw new Error(`Invalid bytes32 parameter: ${name}`);
+  }
+  return val as Hex;
 }
 
 export async function onRequestPost(context: PagesContext) {
@@ -55,7 +70,27 @@ export async function onRequestPost(context: PagesContext) {
     const demoAccount = getServerAccount(context.env, "DEPLOYER_PRIVATE_KEY");
 
     if (body.action === "deposit") {
-      const amount = capDemoAmount(body.amountMon || "0.1");
+      const amount = parseSafeDemoAmount(body.amountMon, "0.1");
+      // Anti-abuse cap: prevent spamming deposits that could lower demo wallet below Monad 10 MON reserve
+      const currentBal = await publicClient.readContract({
+        address: vaultAddress,
+        abi: ZERO_DRAIN_VAULT_ABI,
+        functionName: "balances",
+        args: [demoAccount.address],
+      });
+      if (currentBal >= MAX_DEMO_VAULT_BALANCE) {
+        return jsonResponse({
+          ok: true,
+          action: "deposit",
+          skippedAlreadyFunded: true,
+          txHash: "",
+          blockNumber: (await publicClient.getBlockNumber()).toString(),
+          gasUsed: "0",
+          latencyMs: 0,
+          usedSyncRpc: true,
+        });
+      }
+
       const data = encodeFunctionData({
         abi: ZERO_DRAIN_VAULT_ABI,
         functionName: "deposit",
@@ -78,10 +113,12 @@ export async function onRequestPost(context: PagesContext) {
     }
 
     if (body.action === "registerPasskey") {
+      const qx = assertBytes32(body.qx, "qx");
+      const qy = assertBytes32(body.qy, "qy");
       const data = encodeFunctionData({
         abi: ZERO_DRAIN_VAULT_ABI,
         functionName: "registerPasskey",
-        args: [body.qx, body.qy],
+        args: [qx, qy],
       });
       const sent = await sendSignedTxSync({
         account: demoAccount,
@@ -100,14 +137,10 @@ export async function onRequestPost(context: PagesContext) {
     }
 
     if (body.action === "withdraw") {
-      const amount = capDemoAmount(body.amountMon || "0.05");
+      const amount = parseSafeDemoAmount(body.amountMon, "0.05");
       const recipient = body.hijacked ? DRAINER_ADDRESS : demoAccount.address;
-      const data = encodeFunctionData({
-        abi: ZERO_DRAIN_VAULT_ABI,
-        functionName: "withdraw",
-        args: [recipient, amount],
-      });
 
+      // Pre-simulate to deterministically surface VaultInPasskeyOnlyMode revert on-chain
       try {
         await publicClient.simulateContract({
           account: demoAccount.address,
@@ -135,26 +168,31 @@ export async function onRequestPost(context: PagesContext) {
         });
       }
 
-      const effectiveAmount = body.hijacked ? parseEther("0.001") : amount;
-      const effectiveData = body.hijacked
-        ? encodeFunctionData({
-            abi: ZERO_DRAIN_VAULT_ABI,
-            functionName: "withdraw",
-            args: [recipient, effectiveAmount],
-          })
-        : data;
+      // Safety guard: never send real demo MON to DRAINER_ADDRESS if someone curls while NORMAL
+      if (body.hijacked) {
+        return jsonResponse({
+          ok: false,
+          blockedOnChain: false,
+          error: "Circuit breaker is currently NORMAL; trigger Step 2 DNS hijack first to test on-chain blocking.",
+        }, 400);
+      }
 
+      const data = encodeFunctionData({
+        abi: ZERO_DRAIN_VAULT_ABI,
+        functionName: "withdraw",
+        args: [demoAccount.address, amount],
+      });
       const sent = await sendSignedTxSync({
         account: demoAccount,
         to: vaultAddress,
-        data: effectiveData,
+        data,
       });
 
       return jsonResponse({
         ok: true,
         action: "withdraw",
-        hijackedExecuted: Boolean(body.hijacked),
-        recipient,
+        hijackedExecuted: false,
+        recipient: demoAccount.address,
         txHash: sent.hash,
         blockNumber: sent.blockNumber.toString(),
         gasUsed: sent.gasUsed.toString(),
@@ -164,7 +202,9 @@ export async function onRequestPost(context: PagesContext) {
     }
 
     if (body.action === "emergencyWithdrawWebAuthn") {
-      const amount = capDemoAmount(body.amountMon || "0.05");
+      const amount = parseSafeDemoAmount(body.amountMon, "0.05");
+      const r = assertBytes32(body.auth?.r, "auth.r");
+      const s = assertBytes32(body.auth?.s, "auth.s");
       const data = encodeFunctionData({
         abi: ZERO_DRAIN_VAULT_ABI,
         functionName: "emergencyWithdrawWithWebAuthn",
@@ -173,8 +213,8 @@ export async function onRequestPost(context: PagesContext) {
           amount,
           BigInt(body.deadline),
           {
-            r: body.auth.r,
-            s: body.auth.s,
+            r,
+            s,
             challengeIndex: BigInt(body.auth.challengeIndex),
             typeIndex: BigInt(body.auth.typeIndex),
             authenticatorData: body.auth.authenticatorData,
@@ -201,11 +241,13 @@ export async function onRequestPost(context: PagesContext) {
     }
 
     if (body.action === "emergencyWithdrawRawP256") {
-      const amount = capDemoAmount(body.amountMon || "0.05");
+      const amount = parseSafeDemoAmount(body.amountMon, "0.05");
+      const r = assertBytes32(body.r, "r");
+      const s = assertBytes32(body.s, "s");
       const data = encodeFunctionData({
         abi: ZERO_DRAIN_VAULT_ABI,
         functionName: "emergencyWithdrawWithRawP256",
-        args: [demoAccount.address, amount, BigInt(body.deadline), body.r, body.s],
+        args: [demoAccount.address, amount, BigInt(body.deadline), r, s],
       });
 
       const sent = await sendSignedTxSync({

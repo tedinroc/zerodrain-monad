@@ -102,6 +102,29 @@ export async function createHardwareWebAuthnPasskey(
 }
 
 /**
+ * Exact TLV ASN.1 DER parser for ECDSA P-256 signatures (handles 31/32/33-byte r & s cleanly).
+ */
+function parseDerSignatureExact(der: Uint8Array): { r: bigint; s: bigint } {
+  if (der[0] !== 0x30) throw new Error("Invalid ASN.1 DER sequence");
+  let offset = 2;
+  if (der[1] & 0x80) {
+    offset = 2 + (der[1] & 0x7f);
+  }
+  if (der[offset] !== 0x02) throw new Error("Invalid ASN.1 integer for r");
+  const rLen = der[offset + 1];
+  const rBytes = der.slice(offset + 2, offset + 2 + rLen);
+  offset = offset + 2 + rLen;
+
+  if (der[offset] !== 0x02) throw new Error("Invalid ASN.1 integer for s");
+  const sLen = der[offset + 1];
+  const sBytes = der.slice(offset + 2, offset + 2 + sLen);
+
+  const r = bytesToBigInt(rBytes);
+  const s = normalizeLowS(bytesToBigInt(sBytes));
+  return { r, s };
+}
+
+/**
  * Plan A: Signs an on-chain recovery challenge with real TouchID / FaceID WebAuthn.
  */
 export async function signHardwareWebAuthnChallenge(params: {
@@ -115,15 +138,24 @@ export async function signHardwareWebAuthnChallenge(params: {
   authenticatorData: Hex;
   clientDataJSON: string;
 }> {
-  const { metadata, signature } = await WebAuthnP256.sign({
+  const { metadata, signature, raw } = await WebAuthnP256.sign({
     credentialId: params.credentialId,
     challenge: params.challenge,
   });
 
-  const normalizedS = normalizeLowS(signature.s);
+  // Prefer exact TLV DER parsing of raw authenticator signature to avoid short-r edge cases
+  let rBig = signature.r;
+  let sBig = normalizeLowS(signature.s);
+  const rawResp = (raw as { response?: { signature?: ArrayBuffer } } | undefined)?.response;
+  if (rawResp?.signature) {
+    const parsed = parseDerSignatureExact(new Uint8Array(rawResp.signature));
+    rBig = parsed.r;
+    sBig = parsed.s;
+  }
+
   return {
-    r: toBytes32Hex(signature.r),
-    s: toBytes32Hex(normalizedS),
+    r: toBytes32Hex(rBig),
+    s: toBytes32Hex(sBig),
     challengeIndex: metadata.challengeIndex.toString(),
     typeIndex: metadata.typeIndex.toString(),
     authenticatorData: metadata.authenticatorData,

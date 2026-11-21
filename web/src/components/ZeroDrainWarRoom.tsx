@@ -484,6 +484,15 @@ export default function ZeroDrainWarRoom() {
     setToast(null);
 
     try {
+      // In Demo mode, ensure vault has >= 0.05 MON if another concurrent tester emptied it
+      if (walletMode === "demo" && !hasBalance) {
+        await fetch("/api/demo/action", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ action: "deposit", amountMon: "0.1" }),
+        });
+      }
+
       const chRes = await fetch(
         `/api/vault/challenge?user=${activeUserAddress}&safeRecipient=${activeUserAddress}&amountMon=0.05`,
         { cache: "no-store" }
@@ -684,9 +693,10 @@ export default function ZeroDrainWarRoom() {
               href={`${EXPLORER_URL}/address/${VAULT_ADDRESS}`}
               target="_blank"
               rel="noreferrer"
-              className="hidden items-center gap-1 rounded-lg border border-violet-400/30 bg-violet-500/15 px-2.5 py-1.5 text-xs font-semibold text-violet-200 hover:bg-violet-500/25 sm:inline-flex"
+              title={t.explorerBtn}
+              className="inline-flex items-center gap-1 rounded-lg border border-violet-400/30 bg-violet-500/15 px-2.5 py-1.5 text-xs font-semibold text-violet-200 hover:bg-violet-500/25"
             >
-              {t.explorerBtn}
+              <span className="hidden sm:inline">{t.explorerBtn}</span>
               <ExternalLink className="h-3.5 w-3.5" />
             </a>
           </div>
@@ -917,29 +927,49 @@ export default function ZeroDrainWarRoom() {
                 </div>
               )}
 
-              {/* STEP 4: Hardware Escape via Monad 0x0100 */}
+              {/* STEP 4: Hardware Escape via Monad 0x0100 (or inline 1-tap Bind if another judge tripped first!) */}
               {activeStep === 4 && (
                 <div>
-                  <p className="mb-3 text-sm leading-relaxed text-zinc-300">{t.step4Hint}</p>
-                  <div className="mb-4 flex items-center justify-between rounded-xl border border-emerald-500/30 bg-black/40 px-3.5 py-2.5 font-mono text-xs">
-                    <span className="flex items-center gap-1.5 text-zinc-400">
-                      <Lock className="h-3.5 w-3.5 text-emerald-400" />
-                      {t.safeRecipientLocked}
-                    </span>
-                    <span className="font-bold text-emerald-300">{shortAddr(activeUserAddress || "")}</span>
-                  </div>
-                  <button
-                    onClick={handleHardwareEscape}
-                    disabled={busy !== null}
-                    className="flex w-full items-center justify-center gap-2.5 rounded-2xl bg-emerald-500 px-5 py-4 text-base font-bold text-black shadow-lg shadow-emerald-500/25 transition hover:bg-emerald-400 cursor-pointer disabled:opacity-50"
-                  >
-                    <Fingerprint className="h-5 w-5" />
-                    {busy === "escape"
-                      ? t.step4Busy
-                      : passkeyMode === "webauthn"
-                      ? t.step4BtnWebAuthn
-                      : t.step4BtnWebCrypto}
-                  </button>
+                  {!localKeyMatchesChain ? (
+                    <>
+                      <p className="mb-4 text-sm leading-relaxed text-amber-200">{t.step4NeedBindHint}</p>
+                      <button
+                        onClick={handleStep1Setup}
+                        disabled={busy !== null}
+                        className="flex w-full items-center justify-center gap-2.5 rounded-2xl bg-violet-600 px-5 py-4 text-base font-bold text-white shadow-lg shadow-violet-600/25 transition hover:bg-violet-500 cursor-pointer disabled:opacity-50"
+                      >
+                        <KeyRound className="h-5 w-5" />
+                        {busy === "bind"
+                          ? t.step1Busy
+                          : passkeyMode === "webauthn"
+                          ? t.step1BtnWebAuthn
+                          : t.step1BtnWebCrypto}
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <p className="mb-3 text-sm leading-relaxed text-zinc-300">{t.step4Hint}</p>
+                      <div className="mb-4 flex items-center justify-between rounded-xl border border-emerald-500/30 bg-black/40 px-3.5 py-2.5 font-mono text-xs">
+                        <span className="flex items-center gap-1.5 text-zinc-400">
+                          <Lock className="h-3.5 w-3.5 text-emerald-400" />
+                          {t.safeRecipientLocked}
+                        </span>
+                        <span className="font-bold text-emerald-300">{shortAddr(activeUserAddress || "")}</span>
+                      </div>
+                      <button
+                        onClick={handleHardwareEscape}
+                        disabled={busy !== null}
+                        className="flex w-full items-center justify-center gap-2.5 rounded-2xl bg-emerald-500 px-5 py-4 text-base font-bold text-black shadow-lg shadow-emerald-500/25 transition hover:bg-emerald-400 cursor-pointer disabled:opacity-50"
+                      >
+                        <Fingerprint className="h-5 w-5" />
+                        {busy === "escape"
+                          ? t.step4Busy
+                          : passkeyMode === "webauthn"
+                          ? t.step4BtnWebAuthn
+                          : t.step4BtnWebCrypto}
+                      </button>
+                    </>
+                  )}
                 </div>
               )}
 
