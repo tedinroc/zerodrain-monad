@@ -265,7 +265,7 @@ export async function fetchAndHashServedBundle(context: PagesContext, hijacked: 
     hijacked,
     sandboxNotice:
       "Interactive Attack Sandbox: compares live SHA-256 of actual served JS bundle bytes against on-chain trustedFrontendHash",
-    version: "v2.1.0",
+    version: "v2.3.0",
     bundlePath,
     bundleBytes: buffer.byteLength,
     dnsProvider: hijacked
@@ -287,6 +287,8 @@ export function jsonResponse(
     headers: {
       "content-type": "application/json; charset=utf-8",
       "cache-control": "no-store",
+      "strict-transport-security": "max-age=31536000; includeSubDomains; preload",
+      "x-frame-options": "DENY",
       "x-content-type-options": "nosniff",
       vary: "Origin",
       ...extraHeaders,
