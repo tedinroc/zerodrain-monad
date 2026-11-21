@@ -1,22 +1,26 @@
 import { encodeFunctionData } from "viem";
 import {
   assertControlAuthorized,
+  BadRequestError,
   CLEAN_BUNDLE_SHA256,
   fetchAndHashServedBundle,
   getServerAccount,
   getVaultAddress,
   jsonResponse,
+  parseJsonBody,
   sendSignedTxSync,
   ZERO_DRAIN_VAULT_ABI,
   type PagesContext,
 } from "../../_lib/server";
 
 export async function onRequestPost(context: PagesContext) {
-  // Enforces Same-Origin CSRF + optional ADMIN_RESET_TOKEN Bearer operator auth
+  // Enforces Same-Origin CSRF + application/json + rate limit + fail-closed Operator Bearer auth
   const denied = assertControlAuthorized(context, true);
   if (denied) return denied;
 
   try {
+    await parseJsonBody<Record<string, unknown>>(context.request, true);
+
     const vaultAddress = getVaultAddress(context.env);
     const adminAccount = getServerAccount(context.env, "DEPLOYER_PRIVATE_KEY");
     let cleanHash = CLEAN_BUNDLE_SHA256;
@@ -49,6 +53,9 @@ export async function onRequestPost(context: PagesContext) {
       trustedHash: cleanHash,
     });
   } catch (err) {
+    if (err instanceof BadRequestError) {
+      return jsonResponse({ ok: false, error: err.message }, 400);
+    }
     return jsonResponse(
       { ok: false, error: err instanceof Error ? err.message : "Failed to reset vault mode" },
       500

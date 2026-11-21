@@ -67,11 +67,7 @@ contract ZeroDrainVault is ReentrancyGuard {
     event RecoveryAddressUpdated(address indexed user, address indexed recoveryAddress);
     event Withdrawn(address indexed user, address indexed recipient, uint256 amount);
     event BreakerTripped(
-        address indexed triggeredBy,
-        bytes32 indexed detectedHash,
-        uint256 blockNumber,
-        uint256 timestamp,
-        string reason
+        address indexed triggeredBy, bytes32 indexed detectedHash, uint256 blockNumber, uint256 timestamp, string reason
     );
     event ModeRestored(address indexed restoredBy, bytes32 indexed trustedHash, uint256 blockNumber);
     event EmergencyWithdrawn(
@@ -160,7 +156,7 @@ contract ZeroDrainVault is ReentrancyGuard {
         balances[msg.sender] -= amount;
         totalDeposited -= amount;
 
-        (bool ok, ) = recipient.call{value: amount}("");
+        (bool ok,) = recipient.call{value: amount}("");
         if (!ok) revert TransferFailed();
 
         emit Withdrawn(msg.sender, recipient, amount);
@@ -198,12 +194,11 @@ contract ZeroDrainVault is ReentrancyGuard {
     /**
      * @notice Deterministic domain-separated challenge bound to on-chain locked recovery recipient.
      */
-    function computeRecoveryChallenge(
-        address user,
-        uint256 amount,
-        uint256 nonce,
-        uint256 deadline
-    ) public view returns (bytes32) {
+    function computeRecoveryChallenge(address user, uint256 amount, uint256 nonce, uint256 deadline)
+        public
+        view
+        returns (bytes32)
+    {
         address lockedRecipient = getLockedRecoveryAddress(user);
         return keccak256(
             abi.encode(RECOVERY_DOMAIN, block.chainid, address(this), user, lockedRecipient, amount, nonce, deadline)
@@ -216,11 +211,10 @@ contract ZeroDrainVault is ReentrancyGuard {
      *         Payout target is strictly enforced on-chain as getLockedRecoveryAddress(msg.sender);
      *         frontend CANNOT inject an arbitrary recipient even before signing.
      */
-    function emergencyWithdrawWithWebAuthn(
-        uint256 amount,
-        uint256 deadline,
-        WebAuthn.WebAuthnAuth calldata auth
-    ) external nonReentrant {
+    function emergencyWithdrawWithWebAuthn(uint256 amount, uint256 deadline, WebAuthn.WebAuthnAuth calldata auth)
+        external
+        nonReentrant
+    {
         if (block.timestamp > deadline) revert SignatureExpired();
         if (amount == 0) revert InvalidAmount();
         if (balances[msg.sender] < amount) revert InsufficientBalance();
@@ -235,15 +229,14 @@ contract ZeroDrainVault is ReentrancyGuard {
         bool valid = WebAuthn.verify(abi.encodePacked(challenge), auth, pk.qx, pk.qy, false);
         if (!valid) revert InvalidPasskeySignature();
 
-        bool uv = auth.authenticatorData.length > 32 &&
-            (auth.authenticatorData[32] & WebAuthn.AUTH_DATA_FLAGS_UV) != 0;
+        bool uv = auth.authenticatorData.length > 32 && (auth.authenticatorData[32] & WebAuthn.AUTH_DATA_FLAGS_UV) != 0;
 
         nonces[msg.sender] = currentNonce + 1;
         emergencyRecoveryCount += 1;
         balances[msg.sender] -= amount;
         totalDeposited -= amount;
 
-        (bool ok, ) = lockedRecipient.call{value: amount}("");
+        (bool ok,) = lockedRecipient.call{value: amount}("");
         if (!ok) revert TransferFailed();
 
         emit EmergencyWithdrawn(msg.sender, lockedRecipient, amount, currentNonce, "WEBAUTHN_EIP7951_0x0100", uv);
@@ -254,12 +247,10 @@ contract ZeroDrainVault is ReentrancyGuard {
      *         strictly via Monad native EIP-7951 (0x0100) precompile (`P256.verifyNative`).
      *         Payout target is strictly enforced on-chain as getLockedRecoveryAddress(msg.sender).
      */
-    function emergencyWithdrawWithRawP256(
-        uint256 amount,
-        uint256 deadline,
-        bytes32 r,
-        bytes32 s
-    ) external nonReentrant {
+    function emergencyWithdrawWithRawP256(uint256 amount, uint256 deadline, bytes32 r, bytes32 s)
+        external
+        nonReentrant
+    {
         if (block.timestamp > deadline) revert SignatureExpired();
         if (amount == 0) revert InvalidAmount();
         if (balances[msg.sender] < amount) revert InsufficientBalance();
@@ -280,7 +271,7 @@ contract ZeroDrainVault is ReentrancyGuard {
         balances[msg.sender] -= amount;
         totalDeposited -= amount;
 
-        (bool ok, ) = lockedRecipient.call{value: amount}("");
+        (bool ok,) = lockedRecipient.call{value: amount}("");
         if (!ok) revert TransferFailed();
 
         emit EmergencyWithdrawn(msg.sender, lockedRecipient, amount, currentNonce, "RAW_P256_EIP7951_0x0100", false);

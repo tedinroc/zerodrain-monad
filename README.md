@@ -42,7 +42,7 @@ We explicitly distinguish our **Hackathon Interactive Sandbox** from **Productio
 | Control Surface | Live Hackathon Sandbox (`pages.dev`) | Production Mainnet Requirement |
 | :--- | :--- | :--- |
 | **Attack Simulation & SRI** | Interactive attack sandbox hashing actual served JS files (`/bundles/vault-action.*.js`) to demonstrate real SHA-256 drift + on-chain breaker without attacking live DNS. | Independent M-of-N bonded sentinels monitoring production CDN/DNS bundles and mempool traces. |
-| **Admin Reset (`restoreNormalMode`)** | API enforces Same-Origin CSRF checks + constant-time `ADMIN_RESET_TOKEN` Bearer auth; `PUBLIC_DEMO_MODE=true` is enabled so hackathon judges can self-test freely using disposable Testnet MON. | Disable `PUBLIC_DEMO_MODE`, remove server-held admin keys, and assign `admin` strictly to a **Safe Multisig + Timelock**. |
+| **Admin Reset (`restoreNormalMode`)** | All control endpoints (`/api/sentinel/reset`, `/api/sentinel/inspect-and-trip`, `/api/demo/action`) enforce Same-Origin CSRF, strict `application/json` (rejects `text/plain` CSRF), rate limiting, security headers (`CSP`/`HSTS`/`X-Frame-Options`), and fail-closed `ADMIN_RESET_TOKEN` Bearer auth; `PUBLIC_DEMO_MODE=true` is enabled exclusively on Testnet so hackathon judges can self-test freely. | Set `PUBLIC_DEMO_MODE=false` (leaving public site read-only), remove server-held admin keys, enforce `NORMAL`-mode Passkey rotation timelock, and assign `admin` strictly to a **Safe Multisig + Timelock**. |
 | **Client Key Storage** | **Plan A**: Hardware WebAuthn (`TouchID / FaceID` in Secure Enclave). **Plan B (Demo Fallback)**: Non-extractable WebCrypto `CryptoKey` (`extractable: false`, IndexedDB only; zero private keys in `localStorage`). | Require hardware-backed WebAuthn / hardware wallets and host the Escape Hatch on an independent static/IPFS origin. |
 | **Defense Boundary** | Protocol-level vault withdrawals (`ZeroDrainVault.sol`). | Pair with an **EIP-7702 Wallet Guard Hook** using the same `0x0100` module for external ERC-20 `approve` / `Permit2` protection. |
 
@@ -53,9 +53,11 @@ We explicitly distinguish our **Hackathon Interactive Sandbox** from **Productio
 | **`ZeroDrainVault` v2 Contract** | [`0xF81E520E4512387a906D22C700d282aF6D3247ab`](https://testnet.monadvision.com/address/0xF81E520E4512387a906D22C700d282aF6D3247ab) |
 | **Deployment Tx** | `0x11dc6f20beec8e3b37ed8a25951836957edba8c1fc47a1900db3b6db82c461a5` |
 | **Anchored Clean Bundle SHA-256** | `0x578f2ffb3fca186b9319a589d4f92909e77689fd2125623965d10f8fc7323207` |
-| **Foundry Fork Tests** | 9/9 passing on `--fork-url https://testnet-rpc.monad.xyz` |
+| **Foundry Fork Audit Tests & CI** | 15/15 passing on `--fork-url https://testnet-rpc.monad.xyz` + GitHub Actions CI (`forge fmt`, `forge test`, `tsc`, `eslint`, `next build`) |
 
 ## Project Structure & Local Verification
-- `contracts/` — Foundry project (`ZeroDrainVault.sol`, OpenZeppelin `WebAuthn` & `P256`, 9 Monad Testnet fork tests). Install deps via `forge install --no-git OpenZeppelin/openzeppelin-contracts foundry-rs/forge-std` and run `forge test --fork-url https://testnet-rpc.monad.xyz`.
-- `web/` — Next.js 15 static frontend (`zh-CN` / `zh-TW` / `en`, responsive, `ox` WebAuthnP256 + non-extractable WebCrypto fallback) + Cloudflare Pages Functions (`web/functions/api/`).
+- `contracts/` — Foundry project (`ZeroDrainVault.sol`, OpenZeppelin `WebAuthn` & `P256`, 15 Monad Testnet fork audit tests). Install deps via `forge install --no-git OpenZeppelin/openzeppelin-contracts foundry-rs/forge-std` and run `forge test --fork-url https://testnet-rpc.monad.xyz`.
+- `web/` — Next.js 15 static frontend (`zh-CN` / `zh-TW` / `en`, responsive, `ox` WebAuthnP256 + non-extractable WebCrypto IndexedDB fallback, `_headers` CSP/HSTS) + Cloudflare Pages Functions (`web/functions/api/`).
+- `.github/workflows/ci.yml` — Continuous integration for Foundry + Web strict checks.
 - `.monskills` — MONSKILLS provenance metadata (`chain=monad-testnet`).
+- `LICENSE` — MIT License.

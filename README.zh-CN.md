@@ -36,7 +36,7 @@ ZeroDrain 将前端劫持防护直接下沉至智能合约层，且**熔断绝�
 | 维度 | 黑客松公网演练沙盒 (`pages.dev`) | 生产主网部署要求 |
 | :--- | :--- | :--- |
 | **SRI 劫持演示** | 透明标示为交互式攻击演练沙盒：对真实托管的静态 JS 文件做真实字节级 SHA-256 计算与链上比对。 | 由去中心化 M-of-N 质押哨兵网络独立监控真实生产 CDN/DNS 资产与交易池。 |
-| **管理重置权限** | API 强制实施 Same-Origin CSRF 校验与常时间 `ADMIN_RESET_TOKEN` Bearer 鉴权；演示环境显式开启 `PUBLIC_DEMO_MODE=true` 方便评委自主测试（仅含一次性测试网 MON）。 | 关闭 `PUBLIC_DEMO_MODE`，移除服务端管理员密钥，合约 `admin` 交由 **Safe 多签 + Timelock** 托管。 |
+| **管理重置权限** | 所有控制接口（`reset` / `inspect-and-trip` / `demo/action`）均强制实施 Same-Origin CSRF、严格 `application/json`（拒收 `text/plain` 简单请求）、限流、安全响应头（`CSP`/`HSTS`/`X-Frame-Options`）及默认关闭的 `ADMIN_RESET_TOKEN` Bearer 鉴权；测试网演练环境显式开启 `PUBLIC_DEMO_MODE=true` 方便评委自主测试。 | 生产部署设 `PUBLIC_DEMO_MODE=false`（公网仅保留只读），移除服务端密钥，常规期增加 Passkey 轮替延迟，合约 `admin` 交由 **Safe 多签 + Timelock** 托管。 |
 | **本地密钥隔离** | **Plan A**：硬件 WebAuthn（TouchID / FaceID 安全芯片）。**Plan B（演示备用）**：采用不可导出 `extractable: false` 的 WebCrypto `CryptoKey` 存于 IndexedDB（`localStorage` 零私钥）。 | 生产环境强制硬件生物识别/硬件钱包，并在独立 IPFS 域名托管应急逃生前端。 |
 | **防御边界** | 协议层金库/质押提款（`ZeroDrainVault.sol`）。 | 同套 `0x0100` 模块可无缝挂载为 **EIP-7702 Wallet Guard Hook** 防护外部 ERC-20 `approve`。 |
 
@@ -47,4 +47,5 @@ ZeroDrain 将前端劫持防护直接下沉至智能合约层，且**熔断绝�
 | **`ZeroDrainVault` v2 已验证合约** | [`0xF81E520E4512387a906D22C700d282aF6D3247ab`](https://testnet.monadvision.com/address/0xF81E520E4512387a906D22C700d282aF6D3247ab) |
 | **部署交易哈希** | `0x11dc6f20beec8e3b37ed8a25951836957edba8c1fc47a1900db3b6db82c461a5` |
 | **链上锚定合法 JS SHA-256** | `0x578f2ffb3fca186b9319a589d4f92909e77689fd2125623965d10f8fc7323207` |
-| **Foundry Fork 测试** | `--fork-url https://testnet-rpc.monad.xyz` 9/9 全部通过（含熔断期禁改 Passkey 专项测试） |
+| **Foundry Fork 审计测试与 CI** | `--fork-url https://testnet-rpc.monad.xyz` **15/15 全部通过** + GitHub Actions CI（`forge fmt` / `forge test` / `tsc` / `eslint` / `next build`） |
+| **开源协议** | MIT License（[`LICENSE`](./LICENSE)） |

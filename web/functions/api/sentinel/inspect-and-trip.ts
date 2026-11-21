@@ -1,12 +1,14 @@
 import { encodeFunctionData, formatEther, isAddress, parseEther, type Address } from "viem";
 import {
   assertControlAuthorized,
+  BadRequestError,
   DRAINER_ADDRESS,
   fetchAndHashServedBundle,
   getPublicClient,
   getServerAccount,
   getVaultAddress,
   jsonResponse,
+  parseJsonBody,
   sendSignedTxSync,
   traceCallOnMonad,
   ZERO_DRAIN_VAULT_ABI,
@@ -18,25 +20,36 @@ export async function onRequestPost(context: PagesContext) {
   if (denied) return denied;
 
   try {
-    const body = (await context.request.json()) as {
+    const body = await parseJsonBody<{
       hijacked?: boolean;
       userAddress?: string;
       amountMon?: string;
       autoTrip?: boolean;
-    };
+    }>(context.request);
 
     const hijacked = Boolean(body.hijacked);
     const autoTrip = body.autoTrip !== false;
+    const rawAmount = (body.amountMon || "0.05").trim();
+    if (!/^\d+(\.\d{1,6})?$/.test(rawAmount)) {
+      throw new BadRequestError("Invalid amountMon parameter");
+    }
+    const amountWei = parseEther(rawAmount);
+    if (amountWei <= 0n) {
+      throw new BadRequestError("amountMon must be positive");
+    }
+
+    if (body.userAddress && !isAddress(body.userAddress)) {
+      throw new BadRequestError("Invalid userAddress parameter");
+    }
+
     const vaultAddress = getVaultAddress(context.env);
     const publicClient = getPublicClient();
     const demoAccount = getServerAccount(context.env, "DEPLOYER_PRIVATE_KEY");
     const sentinelAccount = getServerAccount(context.env, "SENTINEL_PRIVATE_KEY");
-    const userAddress: Address =
-      body.userAddress && isAddress(body.userAddress)
-        ? (body.userAddress as Address)
-        : demoAccount.address;
+    const userAddress: Address = body.userAddress
+      ? (body.userAddress as Address)
+      : demoAccount.address;
 
-    const amountWei = parseEther(body.amountMon || "0.05");
     // Real SHA-256 over the ACTUAL served static JS bundle bytes
     const manifest = await fetchAndHashServedBundle(context, hijacked);
 
@@ -80,6 +93,7 @@ export async function onRequestPost(context: PagesContext) {
     } | null = null;
 
     if (threatDetected && autoTrip) {
+      // Idempotency guard: if already in PASSKEY_ONLY, skip redundant tripBreaker tx
       if (currentMode === 1) {
         tripResult = {
           txHash: "",
@@ -138,6 +152,9 @@ export async function onRequestPost(context: PagesContext) {
       breakerTx: tripResult,
     });
   } catch (err) {
+    if (err instanceof BadRequestError) {
+      return jsonResponse({ ok: false, error: err.message }, 400);
+    }
     return jsonResponse(
       { ok: false, error: err instanceof Error ? err.message : "Sentinel inspection failed" },
       500

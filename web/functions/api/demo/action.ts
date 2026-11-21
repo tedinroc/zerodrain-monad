@@ -7,11 +7,13 @@ import {
 } from "viem";
 import {
   assertControlAuthorized,
+  BadRequestError,
   DRAINER_ADDRESS,
   getPublicClient,
   getServerAccount,
   getVaultAddress,
   jsonResponse,
+  parseJsonBody,
   sendSignedTxSync,
   ZERO_DRAIN_VAULT_ABI,
   type PagesContext,
@@ -43,32 +45,46 @@ type DemoActionBody =
     };
 
 const BYTES32_RE = /^0x[0-9a-fA-F]{64}$/;
+const HEX_BYTES_RE = /^0x([0-9a-fA-F]{2})+$/;
+const UINT_RE = /^\d+$/;
 const MAX_DEMO_VAULT_BALANCE = parseEther("0.5");
 
 function parseSafeDemoAmount(amountMon?: string, defaultVal = "0.05"): bigint {
   const raw = (amountMon || defaultVal).trim();
   if (!/^\d+(\.\d{1,6})?$/.test(raw)) {
-    throw new Error("Invalid MON amount format");
+    throw new BadRequestError("Invalid MON amount format");
   }
   const parsed = parseEther(raw);
-  if (parsed <= 0n) throw new Error("Amount must be positive");
+  if (parsed <= 0n) throw new BadRequestError("Amount must be positive");
   const maxAllowed = parseEther("0.2");
   return parsed > maxAllowed ? maxAllowed : parsed;
 }
 
 function assertBytes32(val: unknown, name: string): Hex {
   if (typeof val !== "string" || !BYTES32_RE.test(val)) {
-    throw new Error(`Invalid bytes32 parameter: ${name}`);
+    throw new BadRequestError(`Invalid bytes32 parameter: ${name}`);
   }
   return val as Hex;
 }
 
+function parseUint(val: unknown, name: string): bigint {
+  if (typeof val !== "string" && typeof val !== "number") {
+    throw new BadRequestError(`Invalid unsigned integer: ${name}`);
+  }
+  const s = String(val).trim();
+  if (!UINT_RE.test(s)) {
+    throw new BadRequestError(`Invalid unsigned integer: ${name}`);
+  }
+  return BigInt(s);
+}
+
 export async function onRequestPost(context: PagesContext) {
-  const denied = assertControlAuthorized(context, false);
+  // Enforces Same-Origin CSRF + application/json + rate limit + fail-closed Operator Auth when PUBLIC_DEMO_MODE !== "true"
+  const denied = assertControlAuthorized(context, true);
   if (denied) return denied;
 
   try {
-    const body = (await context.request.json()) as DemoActionBody;
+    const body = await parseJsonBody<DemoActionBody>(context.request);
     const vaultAddress = getVaultAddress(context.env);
     const publicClient = getPublicClient();
     const demoAccount = getServerAccount(context.env, "DEPLOYER_PRIVATE_KEY");
@@ -140,9 +156,12 @@ export async function onRequestPost(context: PagesContext) {
             ok: false,
             lockedDuringIncident: errorName === "PasskeyLockedDuringBreaker",
             errorName,
-            error: "Passkey mutation is frozen on-chain while vault is in PASSKEY_ONLY mode.",
+            error:
+              errorName === "InvalidPublicKey"
+                ? "Provided P-256 public key is not on curve secp256r1."
+                : "Passkey mutation is frozen on-chain while vault is in PASSKEY_ONLY mode.",
           },
-          409
+          errorName === "InvalidPublicKey" ? 400 : 409
         );
       }
 
@@ -235,20 +254,32 @@ export async function onRequestPost(context: PagesContext) {
 
     if (body.action === "emergencyWithdrawWebAuthn") {
       const amount = parseSafeDemoAmount(body.amountMon, "0.05");
+      const deadline = parseUint(body.deadline, "deadline");
       const r = assertBytes32(body.auth?.r, "auth.r");
       const s = assertBytes32(body.auth?.s, "auth.s");
+      const challengeIndex = parseUint(body.auth?.challengeIndex, "auth.challengeIndex");
+      const typeIndex = parseUint(body.auth?.typeIndex, "auth.typeIndex");
+      if (
+        typeof body.auth?.authenticatorData !== "string" ||
+        !HEX_BYTES_RE.test(body.auth.authenticatorData) ||
+        typeof body.auth?.clientDataJSON !== "string" ||
+        !body.auth.clientDataJSON.length
+      ) {
+        throw new BadRequestError("Invalid WebAuthn authenticatorData or clientDataJSON");
+      }
+
       // v2: payout target is enforced strictly on-chain as getLockedRecoveryAddress(msg.sender)
       const data = encodeFunctionData({
         abi: ZERO_DRAIN_VAULT_ABI,
         functionName: "emergencyWithdrawWithWebAuthn",
         args: [
           amount,
-          BigInt(body.deadline),
+          deadline,
           {
             r,
             s,
-            challengeIndex: BigInt(body.auth.challengeIndex),
-            typeIndex: BigInt(body.auth.typeIndex),
+            challengeIndex,
+            typeIndex,
             authenticatorData: body.auth.authenticatorData,
             clientDataJSON: body.auth.clientDataJSON,
           },
@@ -274,13 +305,15 @@ export async function onRequestPost(context: PagesContext) {
 
     if (body.action === "emergencyWithdrawRawP256") {
       const amount = parseSafeDemoAmount(body.amountMon, "0.05");
+      const deadline = parseUint(body.deadline, "deadline");
       const r = assertBytes32(body.r, "r");
       const s = assertBytes32(body.s, "s");
+
       // v2: payout target is enforced strictly on-chain as getLockedRecoveryAddress(msg.sender)
       const data = encodeFunctionData({
         abi: ZERO_DRAIN_VAULT_ABI,
         functionName: "emergencyWithdrawWithRawP256",
-        args: [amount, BigInt(body.deadline), r, s],
+        args: [amount, deadline, r, s],
       });
 
       const sent = await sendSignedTxSync({
@@ -302,6 +335,9 @@ export async function onRequestPost(context: PagesContext) {
 
     return jsonResponse({ ok: false, error: "Unsupported action" }, 400);
   } catch (err) {
+    if (err instanceof BadRequestError) {
+      return jsonResponse({ ok: false, error: err.message }, 400);
+    }
     return jsonResponse(
       { ok: false, error: err instanceof Error ? err.message : "Demo action failed" },
       500

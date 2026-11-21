@@ -1,9 +1,12 @@
 import {
+  BaseError,
+  ContractFunctionRevertedError,
   createPublicClient,
   createWalletClient,
   defineChain,
   fallback,
   http,
+  keccak256,
   type Account,
   type Address,
   type Hex,
@@ -26,6 +29,13 @@ export interface Env {
 export interface PagesContext {
   request: Request;
   env: Env;
+}
+
+export class BadRequestError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "BadRequestError";
+  }
 }
 
 export const DRAINER_ADDRESS = "0xdeadbeef0000000000000000000000000000bad1" as const;
@@ -53,6 +63,27 @@ export const monadTestnet = defineChain({
   },
   testnet: true,
 });
+
+// Best-effort per-isolate sliding-window rate limiter (pairs with Cloudflare Edge WAF/DDoS)
+const RATE_LIMIT_WINDOW_MS = 60_000;
+const RATE_LIMIT_MAX_WRITES = 45;
+const rateBuckets = new Map<string, number[]>();
+
+// Per-signer serialization queue within the isolate to eliminate concurrent nonce collisions
+const signerQueues = new Map<string, Promise<unknown>>();
+
+function withSignerLock<T>(address: string, fn: () => Promise<T>): Promise<T> {
+  const key = address.toLowerCase();
+  const prev = signerQueues.get(key) ?? Promise.resolve();
+  const next = prev.then(fn, fn);
+  const cleanup = next.finally(() => {
+    if (signerQueues.get(key) === cleanup) {
+      signerQueues.delete(key);
+    }
+  });
+  signerQueues.set(key, cleanup);
+  return next;
+}
 
 export function getVaultAddress(env: Env): Address {
   return (env.NEXT_PUBLIC_VAULT_ADDRESS || "0xF81E520E4512387a906D22C700d282aF6D3247ab") as Address;
@@ -90,21 +121,47 @@ function constantTimeEqual(a: string, b: string): boolean {
   return diff === 0;
 }
 
+function checkRateLimit(request: Request): Response | null {
+  const ip =
+    request.headers.get("cf-connecting-ip") ||
+    request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
+    "unknown";
+  const now = Date.now();
+  const cutoff = now - RATE_LIMIT_WINDOW_MS;
+  const recent = (rateBuckets.get(ip) || []).filter((ts) => ts > cutoff);
+  if (recent.length >= RATE_LIMIT_MAX_WRITES) {
+    return jsonResponse(
+      { ok: false, error: "Too many requests; please wait a few seconds before retrying." },
+      429,
+      { "retry-after": "15" }
+    );
+  }
+  recent.push(now);
+  rateBuckets.set(ip, recent);
+  if (rateBuckets.size > 500) {
+    for (const [k, list] of rateBuckets) {
+      if (list.every((ts) => ts <= cutoff)) rateBuckets.delete(k);
+    }
+  }
+  return null;
+}
+
 /**
- * Enforces Same-Origin CSRF protection + optional Operator Bearer Auth.
- * - Cross-origin browser POSTs are always rejected (403).
- * - If ADMIN_RESET_TOKEN is configured or PUBLIC_DEMO_MODE !== "true", requires
- *   constant-time `Authorization: Bearer <ADMIN_RESET_TOKEN>` header.
- * - In PUBLIC_DEMO_MODE="true" (without ADMIN_RESET_TOKEN), same-origin judge browser
- *   interactions are allowed for self-service hackathon testing.
+ * Enforces strict CSRF, Content-Type, Rate Limit, and fail-closed Operator Bearer Auth:
+ * - Cross-origin browser POSTs (Origin / Sec-Fetch-Site mismatch) are always rejected (403).
+ * - Non-JSON Content-Type (including simple text/plain CSRF bypass attempts) is rejected (415).
+ * - Per-IP sliding-window rate limit guards against scripted spam (429).
+ * - If ADMIN_RESET_TOKEN is configured or PUBLIC_DEMO_MODE !== "true", requires constant-time
+ *   `Authorization: Bearer <ADMIN_RESET_TOKEN>` header (401), leaving non-demo sites read-only.
  */
 export function assertControlAuthorized(
   context: PagesContext,
-  requireOperatorAuth: boolean
+  requireOperatorAuth = true
 ): Response | null {
   const reqUrl = new URL(context.request.url);
   const origin = context.request.headers.get("origin");
   const secFetchSite = context.request.headers.get("sec-fetch-site");
+  const contentType = (context.request.headers.get("content-type") || "").toLowerCase();
 
   if (origin && origin !== reqUrl.origin) {
     return jsonResponse({ ok: false, error: "Forbidden: cross-origin control request rejected" }, 403);
@@ -112,6 +169,15 @@ export function assertControlAuthorized(
   if (secFetchSite && secFetchSite !== "same-origin" && secFetchSite !== "none") {
     return jsonResponse({ ok: false, error: "Forbidden: invalid Sec-Fetch-Site header" }, 403);
   }
+  if (!contentType.startsWith("application/json")) {
+    return jsonResponse(
+      { ok: false, error: "Unsupported Media Type: Content-Type must be application/json" },
+      415
+    );
+  }
+
+  const rateDenied = checkRateLimit(context.request);
+  if (rateDenied) return rateDenied;
 
   const configuredToken = (context.env.ADMIN_RESET_TOKEN || "").trim();
   const isPublicDemo = context.env.PUBLIC_DEMO_MODE === "true";
@@ -130,6 +196,24 @@ export function assertControlAuthorized(
     }
   }
   return null;
+}
+
+export async function parseJsonBody<T>(request: Request, allowEmpty = false): Promise<T> {
+  const raw = await request.text();
+  if (!raw.trim()) {
+    if (allowEmpty) return {} as T;
+    throw new BadRequestError("Request body must be valid JSON");
+  }
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new BadRequestError("JSON payload must be an object");
+    }
+    return parsed as T;
+  } catch (err) {
+    if (err instanceof BadRequestError) throw err;
+    throw new BadRequestError("Malformed JSON request body");
+  }
 }
 
 export async function sha256BytesHex(bytes: ArrayBuffer): Promise<Hex> {
@@ -162,8 +246,9 @@ export async function fetchAndHashServedBundle(context: PagesContext, hijacked: 
 
   return {
     hijacked,
-    sandboxNotice: "Interactive Attack Sandbox: compares live SHA-256 of actual served JS bundle bytes against on-chain trustedFrontendHash",
-    version: "v2.0.0",
+    sandboxNotice:
+      "Interactive Attack Sandbox: compares live SHA-256 of actual served JS bundle bytes against on-chain trustedFrontendHash",
+    version: "v2.1.0",
     bundlePath,
     bundleBytes: buffer.byteLength,
     dnsProvider: hijacked
@@ -175,21 +260,43 @@ export async function fetchAndHashServedBundle(context: PagesContext, hijacked: 
   };
 }
 
-export function jsonResponse(data: unknown, status = 200): Response {
+export function jsonResponse(
+  data: unknown,
+  status = 200,
+  extraHeaders?: Record<string, string>
+): Response {
   return new Response(JSON.stringify(data), {
     status,
     headers: {
       "content-type": "application/json; charset=utf-8",
       "cache-control": "no-store",
+      "x-content-type-options": "nosniff",
+      vary: "Origin",
+      ...extraHeaders,
     },
   });
 }
 
-export async function sendSignedTxSync(params: {
+function isNonceCollisionError(err: unknown): boolean {
+  const msg = (err instanceof Error ? err.message : String(err)).toLowerCase();
+  return (
+    msg.includes("nonce too low") ||
+    msg.includes("replacement transaction underpriced") ||
+    msg.includes("nonce has already been used")
+  );
+}
+
+function isAlreadyKnownError(err: unknown): boolean {
+  const msg = (err instanceof Error ? err.message : String(err)).toLowerCase();
+  return msg.includes("already known") || msg.includes("already imported");
+}
+
+async function broadcastOnceSync(params: {
   account: Account;
   to: Address;
   data: Hex;
   value?: bigint;
+  nonceBump?: number;
 }): Promise<{
   hash: Hex;
   blockNumber: bigint;
@@ -207,7 +314,7 @@ export async function sendSignedTxSync(params: {
     ),
   });
 
-  const [nonce, gasPrice, estimatedGas] = await Promise.all([
+  const [pendingNonce, gasPrice, estimatedGas] = await Promise.all([
     publicClient.getTransactionCount({ address: params.account.address, blockTag: "pending" }),
     publicClient.getGasPrice(),
     publicClient.estimateGas({
@@ -218,6 +325,7 @@ export async function sendSignedTxSync(params: {
     }),
   ]);
 
+  const nonce = pendingNonce + (params.nonceBump ?? 0);
   const gasLimit = estimatedGas + estimatedGas / 10n + 2_000n;
   const minGasPrice = 110_000_000_000n;
   const maxFeePerGas = gasPrice > minGasPrice ? gasPrice + 10_000_000_000n : minGasPrice;
@@ -235,6 +343,7 @@ export async function sendSignedTxSync(params: {
     maxPriorityFeePerGas,
   });
 
+  const deterministicHash = keccak256(serialized);
   const tBroadcast = Date.now();
 
   for (const rpcUrl of MONAD_TESTNET_RPCS.slice(0, 2)) {
@@ -257,6 +366,7 @@ export async function sendSignedTxSync(params: {
           gasUsed?: Hex;
           status?: Hex;
         };
+        error?: { message?: string };
       };
       if (json.result?.transactionHash) {
         if (json.result.status === "0x0") {
@@ -270,12 +380,27 @@ export async function sendSignedTxSync(params: {
           usedSyncRpc: true,
         };
       }
+      if (json.error?.message && isNonceCollisionError(new Error(json.error.message))) {
+        throw new Error(json.error.message);
+      }
     } catch (err) {
-      if (err instanceof Error && err.message.includes("reverted")) throw err;
+      if (err instanceof Error && (err.message.includes("reverted") || isNonceCollisionError(err))) {
+        throw err;
+      }
     }
   }
 
-  const hash = await publicClient.sendRawTransaction({ serializedTransaction: serialized });
+  let hash: Hex = deterministicHash;
+  try {
+    hash = await publicClient.sendRawTransaction({ serializedTransaction: serialized });
+  } catch (err) {
+    // If eth_sendRawTransactionSync actually submitted the tx on RPC #1 and only timed out returning receipt,
+    // RPC #2 / fallback returns "already known"; wait on the deterministic tx hash instead of failing.
+    if (!isAlreadyKnownError(err)) {
+      throw err;
+    }
+  }
+
   const receipt: TransactionReceipt = await publicClient.waitForTransactionReceipt({
     hash,
     pollingInterval: 250,
@@ -293,12 +418,37 @@ export async function sendSignedTxSync(params: {
   };
 }
 
+export async function sendSignedTxSync(params: {
+  account: Account;
+  to: Address;
+  data: Hex;
+  value?: bigint;
+}): Promise<{
+  hash: Hex;
+  blockNumber: bigint;
+  gasUsed: bigint;
+  latencyMs: number;
+  usedSyncRpc: boolean;
+}> {
+  return withSignerLock(params.account.address, async () => {
+    try {
+      return await broadcastOnceSync(params);
+    } catch (err) {
+      if (isNonceCollisionError(err)) {
+        // Cross-isolate nonce collision retry with fresh pending nonce
+        return await broadcastOnceSync(params);
+      }
+      throw err;
+    }
+  });
+}
+
 export async function traceCallOnMonad(params: {
   from: Address;
   to: Address;
   data: Hex;
 }): Promise<{
-  method: "debug_traceCall (callTracer)" | "eth_call (stateOverride)";
+  method: "debug_traceCall (callTracer)" | "eth_call (fallback simulation)";
   latencyMs: number;
   traceResult: Record<string, unknown>;
 }> {
@@ -329,20 +479,30 @@ export async function traceCallOnMonad(params: {
         };
       }
     } catch {
-      // fallback
+      // fallback to eth_call
     }
   }
 
   const publicClient = getPublicClient();
   let callOutcome = "WOULD_SUCCEED";
+  let revertReason: string | null = null;
   try {
     await publicClient.call({ account: params.from, to: params.to, data: params.data });
   } catch (err) {
-    callOutcome = `REVERTED: ${err instanceof Error ? err.message.slice(0, 120) : "reverted"}`;
+    callOutcome = "REVERTED";
+    if (err instanceof BaseError) {
+      const revertErr = err.walk((e) => e instanceof ContractFunctionRevertedError);
+      if (revertErr instanceof ContractFunctionRevertedError && revertErr.data?.errorName) {
+        revertReason = revertErr.data.errorName;
+      }
+    }
+    if (!revertReason) {
+      revertReason = err instanceof Error ? err.message.slice(0, 120) : "reverted";
+    }
   }
   return {
-    method: "eth_call (stateOverride)",
+    method: "eth_call (fallback simulation)",
     latencyMs: Date.now() - t0,
-    traceResult: { outcome: callOutcome },
+    traceResult: { outcome: callOutcome, revertReason },
   };
 }

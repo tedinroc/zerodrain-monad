@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
   Check,
@@ -157,9 +157,15 @@ export default function ZeroDrainWarRoom() {
   const [logs, setLogs] = useState<AuditEntry[]>([]);
   const [showJudgeDetails, setShowJudgeDetails] = useState(false);
 
+  const fetchIdRef = useRef(0);
+  const prevModeRef = useRef<"NORMAL" | "PASSKEY_ONLY" | null>(null);
+
   useEffect(() => {
     const initial = detectInitialLocale();
     setLocale(initial);
+    if (typeof document !== "undefined") {
+      document.documentElement.lang = initial;
+    }
     setStoredWebAuthn(loadStoredWebAuthn());
     void loadStoredWebCrypto().then((k) => setStoredWebCrypto(k));
   }, []);
@@ -185,11 +191,21 @@ export default function ZeroDrainWarRoom() {
   }, [walletMode, connectedWallet, status?.demoAddress]);
 
   const fetchStatus = useCallback(async () => {
+    const reqId = ++fetchIdRef.current;
     try {
       const qs = walletMode === "metamask" && connectedWallet ? `?user=${connectedWallet}` : "";
       const res = await fetch(`/api/vault/status${qs}`, { cache: "no-store" });
       const data = (await res.json()) as VaultStatusResponse;
-      if (data.ok) setStatus(data);
+      if (reqId !== fetchIdRef.current) return; // Discard stale out-of-order response
+      if (data.ok) {
+        if (prevModeRef.current === "PASSKEY_ONLY" && data.mode === "NORMAL") {
+          setHijacked(false);
+          setInspection(null);
+          setBlockedAlert(null);
+        }
+        prevModeRef.current = data.mode;
+        setStatus(data);
+      }
     } catch {
       // ignore transient network hiccup
     }
@@ -601,7 +617,11 @@ export default function ZeroDrainWarRoom() {
     setBusy("reset");
     setToast(null);
     try {
-      const res = await fetch("/api/sentinel/reset", { method: "POST" });
+      const res = await fetch("/api/sentinel/reset", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: "{}",
+      });
       const data = await res.json();
       if (!data.ok) throw new Error(data.error);
       setHijacked(false);

@@ -12,12 +12,14 @@ export async function onRequestGet(context: PagesContext) {
   try {
     const url = new URL(context.request.url);
     const queryUser = url.searchParams.get("user");
+    if (queryUser && !isAddress(queryUser)) {
+      return jsonResponse({ ok: false, error: "Invalid user address parameter" }, 400);
+    }
     const vaultAddress = getVaultAddress(context.env);
     const publicClient = getPublicClient();
     const demoAccount = getServerAccount(context.env, "DEPLOYER_PRIVATE_KEY");
     const sentinelAccount = getServerAccount(context.env, "SENTINEL_PRIVATE_KEY");
-    const activeUser: Address =
-      queryUser && isAddress(queryUser) ? (queryUser as Address) : demoAccount.address;
+    const activeUser: Address = queryUser ? (queryUser as Address) : demoAccount.address;
 
     const [
       blockNumber,
