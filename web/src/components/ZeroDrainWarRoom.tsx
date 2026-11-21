@@ -21,7 +21,15 @@ import {
   Wallet,
   Zap,
 } from "lucide-react";
-import { createWalletClient, custom, parseEther, type Address, type Hex } from "viem";
+import {
+  BaseError,
+  ContractFunctionRevertedError,
+  createWalletClient,
+  custom,
+  parseEther,
+  type Address,
+  type Hex,
+} from "viem";
 import { ZERO_DRAIN_VAULT_ABI } from "@/lib/abi";
 import {
   DICTIONARIES,
@@ -475,14 +483,31 @@ export default function ZeroDrainWarRoom() {
             functionName: "withdraw",
             args: [targetRecipient, parseEther("0.05")],
           });
-        } catch {
-          setBlockedAlert({
-            errorName: "VaultInPasskeyOnlyMode",
-            attemptedRecipient: targetRecipient,
-          });
-          pushLog({ kind: "blocked", label: t.logBlocked });
-          setToast({ type: "ok", text: t.toastBlockedOk });
-          return;
+        } catch (simErr) {
+          // F-04: Decode the actual EVM revert selector instead of assuming VaultInPasskeyOnlyMode
+          let errorName: string | null = null;
+          if (simErr instanceof BaseError) {
+            const revertErr = simErr.walk((e) => e instanceof ContractFunctionRevertedError);
+            if (revertErr instanceof ContractFunctionRevertedError && revertErr.data?.errorName) {
+              errorName = revertErr.data.errorName;
+            }
+          }
+          if (isTripped && errorName === "VaultInPasskeyOnlyMode") {
+            setBlockedAlert({
+              errorName,
+              attemptedRecipient: targetRecipient,
+            });
+            pushLog({ kind: "blocked", label: t.logBlocked });
+            setToast({ type: "ok", text: t.toastBlockedOk });
+            return;
+          }
+          throw new Error(
+            errorName
+              ? `Preflight simulation reverted with ${errorName} (not circuit breaker)`
+              : simErr instanceof Error
+              ? simErr.message
+              : "Withdraw simulation failed"
+          );
         }
       }
       await fetchStatus();

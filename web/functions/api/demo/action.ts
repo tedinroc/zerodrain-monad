@@ -213,15 +213,21 @@ export async function onRequestPost(context: PagesContext) {
         if (simErr instanceof BaseError) {
           const revertErr = simErr.walk((e) => e instanceof ContractFunctionRevertedError);
           if (revertErr instanceof ContractFunctionRevertedError) {
-            const errorName = revertErr.data?.errorName || "VaultInPasskeyOnlyMode";
+            const errorName = revertErr.data?.errorName || "ContractReverted";
             const details = `${errorName}(${(revertErr.data?.args || []).map(String).join(", ")})`;
-            return jsonResponse({
-              ok: false,
-              blockedOnChain: true,
-              errorName,
-              error: details,
-              attemptedRecipient: recipient,
-            });
+            // F-04: Only report blockedOnChain=true when the circuit breaker itself reverted the call!
+            const isBreakerBlock = errorName === "VaultInPasskeyOnlyMode";
+            return jsonResponse(
+              {
+                ok: false,
+                blockedOnChain: isBreakerBlock,
+                simulatedPreflight: true,
+                errorName,
+                error: details,
+                attemptedRecipient: recipient,
+              },
+              isBreakerBlock ? 200 : 409
+            );
           }
         }
         throw simErr;

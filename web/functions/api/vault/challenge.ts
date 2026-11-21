@@ -23,8 +23,9 @@ export async function onRequestGet(context: PagesContext) {
     }
 
     const amount = parseEther(amountMon);
-    if (amount <= 0n) {
-      throw new BadRequestError("amountMon must be positive");
+    const maxChallengeAmount = parseEther("100");
+    if (amount <= 0n || amount > maxChallengeAmount) {
+      throw new BadRequestError("amountMon must be between 0 and 100 MON");
     }
 
     const vaultAddress = getVaultAddress(context.env);

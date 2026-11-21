@@ -8,7 +8,7 @@ on:
 
 jobs:
   contracts:
-    name: Foundry Format, Build & 15 Audit Tests
+    name: Foundry Format, Build & 15 Security Tests
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -18,13 +18,13 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Install Foundry
+      - name: Install Foundry (pinned v1.9.0)
         uses: foundry-rs/foundry-toolchain@v1
         with:
-          version: nightly
+          version: v1.9.0
 
-      - name: Install Foundry Dependencies
-        run: forge install foundry-rs/forge-std OpenZeppelin/openzeppelin-contracts
+      - name: Install Pinned Foundry Dependencies
+        run: forge install foundry-rs/forge-std@v1.17.0 OpenZeppelin/openzeppelin-contracts@v5.7.0
 
       - name: Check Solidity Formatting
         run: forge fmt --check
@@ -32,7 +32,7 @@ jobs:
       - name: Build Contracts
         run: forge build --sizes
 
-      - name: Run 15 Security Audit Tests (Monad Testnet Fork for Native 0x0100)
+      - name: Run 15 Security & Fork Tests (Monad Testnet Fork for Native 0x0100)
         run: forge test -vv --fork-url https://testnet-rpc.monad.xyz
 
   web:

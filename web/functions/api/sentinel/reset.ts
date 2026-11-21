@@ -23,18 +23,28 @@ export async function onRequestPost(context: PagesContext) {
 
     const vaultAddress = getVaultAddress(context.env);
     const adminAccount = getServerAccount(context.env, "DEPLOYER_PRIVATE_KEY");
-    let cleanHash = CLEAN_BUNDLE_SHA256;
-    try {
-      const cleanManifest = await fetchAndHashServedBundle(context, false);
-      cleanHash = cleanManifest.sriHash;
-    } catch {
-      // use canonical compiled constant
+
+    // F-02 Defense: NEVER anchor a live-fetched hash as trusted!
+    // Verify the currently served clean bundle matches the canonical compile-time hash;
+    // if it drifted, refuse reset so a compromised bundle can never self-legitimize.
+    const cleanManifest = await fetchAndHashServedBundle(context, false);
+    if (cleanManifest.sriHash.toLowerCase() !== CLEAN_BUNDLE_SHA256.toLowerCase()) {
+      return jsonResponse(
+        {
+          ok: false,
+          error:
+            "Reset refused: served clean bundle SHA-256 does not match canonical trustedFrontendHash.",
+          expectedHash: CLEAN_BUNDLE_SHA256,
+          observedHash: cleanManifest.sriHash,
+        },
+        409
+      );
     }
 
     const data = encodeFunctionData({
       abi: ZERO_DRAIN_VAULT_ABI,
       functionName: "restoreNormalMode",
-      args: [cleanHash],
+      args: [CLEAN_BUNDLE_SHA256],
     });
 
     const sent = await sendSignedTxSync({
@@ -50,7 +60,7 @@ export async function onRequestPost(context: PagesContext) {
       blockNumber: sent.blockNumber.toString(),
       latencyMs: sent.latencyMs,
       usedSyncRpc: sent.usedSyncRpc,
-      trustedHash: cleanHash,
+      trustedHash: CLEAN_BUNDLE_SHA256,
     });
   } catch (err) {
     if (err instanceof BadRequestError) {
